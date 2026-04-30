@@ -1,0 +1,2 @@
+[console_scripts]
+realtime-translation = app.main:main

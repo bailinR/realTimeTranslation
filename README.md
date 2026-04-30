@@ -1,0 +1,67 @@
+# RealTime Translation
+
+Windows 桌面端实时翻译工具，面向“听海外主播直播并实时看中文字幕”的场景。
+
+## 功能
+
+- 抓取 Windows 系统播放声音，适配耳机和外放
+- 自动识别或手动指定 `泰语 / 越南语 / 英语`
+- 主窗口展示原文、中文、时间戳、状态
+- 悬浮字幕只显示两行中文，并支持透明穿透或普通置顶
+- 云端转写 + 本地 `faster-whisper` 草稿兜底
+- SQLite 会话存档，支持导出 `TXT` 和 `SRT`
+
+## 安装
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e .[dev]
+pip install -e .[local-asr]
+```
+
+`faster-whisper` 为可选依赖。若只想先跑云端稳态模式，可以不安装。
+
+## 运行
+
+```powershell
+realtime-translation
+```
+
+如果你是在项目根目录直接启动，也可以用下面几种方式：
+
+```powershell
+.\.venv\Scripts\python.exe -m app.main
+.\.venv\Scripts\realtime-translation.exe
+.\start.ps1
+.\start.ps1 -Background
+```
+
+快捷启动：
+
+- 双击项目根目录的 [start.bat](D:/work/project/it/realTimeTranslation/start.bat)
+- 在 PowerShell 里运行 [start.ps1](D:/work/project/it/realTimeTranslation/start.ps1)
+- 若想直接后台拉起窗口，不占当前终端，可运行 `.\start.ps1 -Background`
+
+首次运行后：
+
+1. 在设置里填入 OpenAI-compatible `base_url`、`api_key`、转写模型、翻译模型
+2. 选择模式：
+   - `steady`：云端最终结果优先
+   - `fast`：本地草稿先出，云端最终覆盖
+3. 点击“开始翻译”
+
+## 默认实现说明
+
+- 云端转写 provider 采用短窗分块实时转写，兼容 OpenAI `/audio/transcriptions`
+- 中文翻译采用 OpenAI-compatible `/chat/completions`
+- 若云端连续失败，会切换为本地-only 降级模式并在 UI 中提示
+
+## 项目结构
+
+- `app/ui`：主窗口、设置、悬浮字幕、托盘
+- `app/audio`：WASAPI loopback 采集和重采样
+- `app/asr`：云端 / 本地转写 provider
+- `app/translate`：中文翻译 provider
+- `app/store`：SQLite、设置、导出
+- `app/core`：编排、事件总线、文本去重、状态管理
