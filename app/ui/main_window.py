@@ -4,9 +4,10 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QSize, Qt
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtGui import QColor, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
@@ -16,8 +17,11 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QMenu,
     QPlainTextEdit,
     QPushButton,
+    QSizeGrip,
+    QSizePolicy,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -25,7 +29,7 @@ from PySide6.QtWidgets import (
 
 from app.config import SettingsManager
 from app.core.controller import AppController
-from app.models import AppSettings, OverlayMode, SessionRecord, SubtitleSegment
+from app.models import AppSettings, OverlayMode, RecognitionMode, SessionRecord, SubtitleSegment, TranslationStyle
 from app.store.database import Database
 from app.store.settings_secrets import SecretStore
 from app.ui.overlay import OverlayWindow
@@ -37,8 +41,8 @@ class SegmentHistoryWidget(QFrame):
         super().__init__(parent)
         self.setObjectName("historyCard")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(2)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(1)
 
         self.source_label = QLabel("")
         self.translation_label = QLabel("")
@@ -46,17 +50,33 @@ class SegmentHistoryWidget(QFrame):
         self.translation_label.setObjectName("translationLine")
         self.source_label.setWordWrap(True)
         self.translation_label.setWordWrap(True)
+        self.translation_label.setFont(QFont("Microsoft YaHei UI", 12, QFont.Weight.DemiBold))
 
         layout.addWidget(self.source_label)
         layout.addWidget(self.translation_label)
 
     def update_segment(self, segment: SubtitleSegment) -> None:
-        stamp = segment.started_at.strftime("%H:%M:%S")
-        self.source_label.setText(f"[{stamp}] [{segment.source_lang}] {segment.source_text}")
+        self.source_label.setText(f"[{segment.source_lang}] {segment.source_text}")
         self.translation_label.setText(f"> {segment.translated_text}")
 
 
 class MainWindow(QMainWindow):
+    LANGUAGE_LABELS = {
+        "auto": "自动",
+        "en": "英语",
+        "th": "泰语",
+        "vi": "越南语",
+    }
+    RECOGNITION_MODE_LABELS = {
+        RecognitionMode.PRECISE: "精准",
+        RecognitionMode.REALTIME: "实时",
+    }
+    TRANSLATION_STYLE_LABELS = {
+        TranslationStyle.LIVE_COMMERCE: "带货",
+        TranslationStyle.COLLOQUIAL: "口语",
+        TranslationStyle.FORMAL: "正式",
+    }
+
     def __init__(
         self,
         *,
@@ -76,17 +96,22 @@ class MainWindow(QMainWindow):
         self.exports_dir = exports_dir
         self.overlay = OverlayWindow()
         self.overlay.set_overlay_mode(self.settings.overlay_mode)
-        self.overlay.show()
         self._history_items_by_chunk: dict[int, tuple[QListWidgetItem, SegmentHistoryWidget]] = {}
         self._main_window_on_top = False
-        self._overlay_visible = True
+        self._overlay_visible = False
         self._drag_offset = None
+        self._session_panel_width = 96
+        self._main_splitter: QSplitter | None = None
         self.setWindowTitle("RealTime Translation")
-        self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
+        self.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.NoDropShadowWindowHint
+        )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.resize(980, 700)
-        self.setMinimumSize(860, 620)
-        self.setWindowOpacity(0.96)
+        self.resize(640, 420)
+        self.setMinimumSize(360, 260)
+        self.setWindowOpacity(0.88)
 
         self._build_ui()
         self._connect_signals()
@@ -104,8 +129,8 @@ class MainWindow(QMainWindow):
             }
             QFrame#windowShell {
                 background: rgba(7, 17, 28, 224);
-                border: 1px solid rgba(56, 78, 104, 185);
-                border-radius: 18px;
+                border: none;
+                border-radius: 0;
             }
             QFrame#titleBar {
                 background: transparent;
@@ -114,22 +139,18 @@ class MainWindow(QMainWindow):
             QPushButton {
                 background: #17283b;
                 border: 1px solid #31455b;
-                border-radius: 10px;
+                border-radius: 5px;
                 color: #edf4ff;
-                padding: 6px 12px;
+                font-size: 9px;
+                padding: 2px 5px;
             }
             QPushButton:hover {
                 background: #203349;
             }
             QListWidget, QPlainTextEdit {
                 background: #020913;
-                border: 1px solid #1e3044;
-                border-radius: 14px;
-            }
-            QFrame#liveCaptionFrame {
-                background: rgba(6, 14, 23, 235);
-                border: 1px solid #1e3245;
-                border-radius: 12px;
+                border: none;
+                border-radius: 0;
             }
             QFrame#historyCard {
                 background: transparent;
@@ -138,37 +159,37 @@ class MainWindow(QMainWindow):
             }
             QLabel#sourceLine {
                 color: #b9c9da;
-                font-size: 14px;
+                font-size: 9px;
                 font-weight: 500;
             }
             QLabel#translationLine {
                 color: #f3f7fb;
-                font-size: 18px;
-                font-weight: 700;
+                font-size: 12px;
+                font-weight: 600;
             }
             """
         )
 
-        self.toggle_button = QPushButton("开始翻译")
-        self.clear_button = QPushButton("清空当前显示")
-        self.export_button = QPushButton("导出会话")
+        self.toggle_button = QPushButton("开始")
+        self.clear_button = QPushButton("清空")
+        self.export_button = QPushButton("导出")
         self.settings_button = QPushButton("设置")
-        self.pin_button = QPushButton("置顶主屏")
-        self.overlay_visibility_button = QPushButton("隐藏字幕")
-        self.overlay_button = QPushButton("切换悬浮层模式")
-        self.recover_button = QPushButton("恢复云端")
+        self.pin_button = QPushButton("置顶")
+        self.overlay_visibility_button = QPushButton("字幕")
+        self.overlay_button = QPushButton("字幕穿透")
+        self.recover_button = QPushButton("恢复")
         root = QWidget()
         root.setObjectName("outerRoot")
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
         shell = QFrame()
         shell.setObjectName("windowShell")
         shell_layout = QVBoxLayout(shell)
-        shell_layout.setContentsMargins(12, 8, 12, 10)
-        shell_layout.setSpacing(6)
+        shell_layout.setContentsMargins(6, 4, 6, 6)
+        shell_layout.setSpacing(3)
         layout.addWidget(shell)
 
         self.title_bar = QFrame()
@@ -176,20 +197,22 @@ class MainWindow(QMainWindow):
         self.title_bar.installEventFilter(self)
         title_layout = QHBoxLayout(self.title_bar)
         title_layout.setContentsMargins(4, 0, 4, 0)
-        title_layout.setSpacing(6)
-        self.title_bar.setFixedHeight(30)
+        title_layout.setSpacing(4)
+        self.title_bar.setFixedHeight(20)
         self.title_label = QLabel("realTimeTranslation")
-        self.title_label.setStyleSheet("font-size: 12px; color: #d8e3f1; font-weight: 700;")
-        self.minimize_button = QPushButton("最小化")
-        self.close_button = QPushButton("关闭")
-        self.minimize_button.setFixedHeight(24)
-        self.close_button.setFixedHeight(24)
+        self.title_label.setStyleSheet("font-size: 9px; color: #d8e3f1; font-weight: 600;")
+        self.minimize_button = QPushButton("—")
+        self.close_button = QPushButton("×")
+        self.minimize_button.setFixedHeight(18)
+        self.close_button.setFixedHeight(18)
+        self.minimize_button.setFixedWidth(22)
+        self.close_button.setFixedWidth(22)
         self.minimize_button.setStyleSheet(
-            "QPushButton { background: #132234; border: 1px solid #31455b; color: #d8e3f1; border-radius: 8px; padding: 2px 10px; }"
+            "QPushButton { background: #132234; border: 1px solid #31455b; color: #d8e3f1; border-radius: 4px; font-size: 11px; padding: 0; }"
             "QPushButton:hover { background: #1c3048; }"
         )
         self.close_button.setStyleSheet(
-            "QPushButton { background: #4a2229; border: 1px solid #7f4b53; color: #fff1f1; border-radius: 8px; padding: 2px 10px; }"
+            "QPushButton { background: #4a2229; border: 1px solid #7f4b53; color: #fff1f1; border-radius: 4px; font-size: 12px; padding: 0; }"
             "QPushButton:hover { background: #643039; }"
         )
         title_layout.addWidget(self.title_label)
@@ -200,7 +223,7 @@ class MainWindow(QMainWindow):
 
         controls_row = QHBoxLayout()
         controls_row.setContentsMargins(0, 0, 0, 0)
-        controls_row.setSpacing(6)
+        controls_row.setSpacing(4)
         for button in (
             self.toggle_button,
             self.clear_button,
@@ -211,79 +234,102 @@ class MainWindow(QMainWindow):
             self.overlay_button,
             self.recover_button,
         ):
+            button.setFixedHeight(20)
             controls_row.addWidget(button)
         controls_row.addStretch(1)
         shell_layout.addLayout(controls_row)
 
         status_row_widget = QWidget()
-        status_row_widget.setFixedHeight(22)
+        status_row_widget.setFixedHeight(15)
         status_row = QHBoxLayout(status_row_widget)
         status_row.setContentsMargins(0, 0, 0, 0)
-        status_row.setSpacing(12)
+        status_row.setSpacing(6)
         self.status_label = QLabel("准备就绪")
         self.status_label.setWordWrap(False)
-        self.status_label.setMinimumWidth(320)
-        self.status_label.setMaximumHeight(18)
-        self.status_label.setStyleSheet("font-size: 12px; color: #90a7bf; padding: 0 4px;")
-        self.mode_hint = QLabel(f"模式: {self.settings.recognition.mode.value}")
-        self.language_hint = QLabel(f"语言: {self.settings.recognition.source_language}")
-        self.stats_label = QLabel("音频帧: 0 | 分块: 0")
-        self.mode_hint.setStyleSheet("font-size: 12px; color: #90a7bf;")
-        self.language_hint.setStyleSheet("font-size: 12px; color: #90a7bf;")
-        self.stats_label.setStyleSheet("font-size: 12px; color: #90a7bf; padding: 0 4px;")
+        self.status_label.setMinimumWidth(140)
+        self.status_label.setMaximumHeight(14)
+        self.status_label.setStyleSheet("font-size: 8px; color: #90a7bf; padding: 0 2px;")
+        self.mode_hint = QLabel("")
+        self.language_hint = QLabel(f"语言: {self._language_label(self.settings.recognition.source_language)}")
+        self.stats_label = QLabel("帧:0|块:0")
+        self.mode_hint.setStyleSheet("font-size: 8px; color: #90a7bf;")
+        self.language_hint.setStyleSheet("font-size: 8px; color: #90a7bf;")
+        self.stats_label.setStyleSheet("font-size: 8px; color: #90a7bf; padding: 0 2px;")
         status_row.addWidget(self.status_label, 1)
         status_row.addWidget(self.mode_hint)
         status_row.addWidget(self.language_hint)
         status_row.addWidget(self.stats_label)
         shell_layout.addWidget(status_row_widget)
+        self._refresh_recognition_hints()
 
-        splitter = QSplitter()
-        shell_layout.addWidget(splitter)
+        self._main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        shell_layout.addWidget(self._main_splitter, 1)
 
         self.session_list = QListWidget()
-        self.session_list.setMaximumWidth(260)
-        self.session_list.setSpacing(2)
-        splitter.addWidget(self.session_list)
-
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(6)
-
-        self.live_caption_frame = QFrame()
-        self.live_caption_frame.setObjectName("liveCaptionFrame")
-        self.live_caption_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        live_caption_layout = QVBoxLayout(self.live_caption_frame)
-        live_caption_layout.setContentsMargins(14, 10, 14, 10)
-        self.live_translation_label = QLabel("等待字幕...")
-        self.live_translation_label.setFont(QFont("Microsoft YaHei UI", 14, QFont.Weight.Bold))
-        self.live_translation_label.setStyleSheet("color: #f3f7fb;")
-        self.live_translation_label.setWordWrap(True)
-        self.live_translation_label.setGraphicsEffect(self._build_shadow())
-        live_caption_layout.addWidget(self.live_translation_label)
-        self.live_caption_frame.setMinimumHeight(56)
-        self.live_caption_frame.setMaximumHeight(78)
-        right_layout.addWidget(self.live_caption_frame)
+        self.session_list.setMinimumWidth(56)
+        self.session_list.setMaximumWidth(280)
+        self.session_list.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        self.session_list.setStyleSheet("QListWidget { font-size: 9px; }")
+        self.session_list.setSpacing(1)
+        self.session_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.session_list.customContextMenuRequested.connect(self._session_list_context_menu)
+        self._main_splitter.addWidget(self.session_list)
 
         self.history_list = QListWidget()
-        self.history_list.setSpacing(1)
+        self.history_list.setSpacing(0)
         self.history_list.setAlternatingRowColors(False)
-        right_layout.addWidget(self.history_list, 3)
+        self.history_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         self.diagnostic_box = QPlainTextEdit()
         self.diagnostic_box.setReadOnly(True)
-        self.diagnostic_box.setPlaceholderText("这里会显示采集、识别、翻译和报错日志。")
+        self.diagnostic_box.setPlaceholderText("日志")
+        self.diagnostic_box.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.diagnostic_box.setStyleSheet(
-            "QPlainTextEdit { color: #8bb0c9; font-family: Consolas, 'Microsoft YaHei UI'; font-size: 12px; }"
+            "QPlainTextEdit { color: #8bb0c9; font-family: Consolas, 'Microsoft YaHei UI'; font-size: 8px; padding: 2px 4px; }"
         )
-        self.diagnostic_box.setMaximumHeight(180)
-        right_layout.addWidget(self.diagnostic_box, 1)
+        self.diagnostic_box.setMinimumHeight(32)
+        self.diagnostic_box.setMaximumHeight(320)
+        self.diagnostic_box.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
-        splitter.addWidget(right)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([220, 1080])
+        self._right_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._right_splitter.setObjectName("rightSplitter")
+        self._right_splitter.setChildrenCollapsible(False)
+        self._right_splitter.setHandleWidth(5)
+        self._right_splitter.addWidget(self.history_list)
+        self._right_splitter.addWidget(self.diagnostic_box)
+        self._right_splitter.setStretchFactor(0, 1)
+        self._right_splitter.setStretchFactor(1, 0)
+        self._right_splitter.setSizes([300, 52])
+
+        right_column = QWidget()
+        right_outer = QVBoxLayout(right_column)
+        right_outer.setContentsMargins(0, 0, 0, 0)
+        right_outer.setSpacing(0)
+        right_outer.addWidget(self._right_splitter, 1)
+        right_column.setMinimumWidth(160)
+
+        self._main_splitter.addWidget(right_column)
+        self._main_splitter.setStretchFactor(0, 0)
+        self._main_splitter.setStretchFactor(1, 1)
+        self._main_splitter.splitterMoved.connect(self._on_main_splitter_moved)
+        self._main_splitter.setSizes([self._session_panel_width, 464])
+
+        grip_row = QWidget()
+        grip_layout = QHBoxLayout(grip_row)
+        grip_layout.setContentsMargins(0, 0, 0, 0)
+        grip_layout.setSpacing(0)
+        grip_layout.addStretch(1)
+        self._size_grip = QSizeGrip(self)
+        self._size_grip.setStyleSheet(
+            "QSizeGrip { width: 14px; height: 14px; color: #6a8aad; } QSizeGrip:hover { color: #9ec0e8; }"
+        )
+        grip_layout.addWidget(self._size_grip, 0, Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
+        grip_row.setFixedHeight(14)
+        shell_layout.addWidget(grip_row)
+
         self._set_toggle_button_state(False)
         self._apply_overlay_visibility_button_state()
+        self._apply_overlay_penetration_button_state()
 
     def _connect_signals(self) -> None:
         self.toggle_button.clicked.connect(lambda: asyncio.create_task(self._toggle_translation()))
@@ -297,7 +343,10 @@ class MainWindow(QMainWindow):
         self.minimize_button.clicked.connect(self.showMinimized)
         self.close_button.clicked.connect(self.close)
         self.session_list.itemSelectionChanged.connect(self._load_selected_session)
-        self.controller.running_changed.connect(self._set_toggle_button_state)
+        self._session_delete_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self.session_list)
+        self._session_delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._session_delete_shortcut.activated.connect(self._delete_selected_session)
+        self.controller.running_changed.connect(self._on_running_changed)
         self.controller.segment_updated.connect(self._upsert_segment)
         self.controller.session_changed.connect(self._refresh_sessions)
         self.controller.status_changed.connect(self.status_label.setText)
@@ -318,17 +367,32 @@ class MainWindow(QMainWindow):
         else:
             await self.controller.stop()
 
+    def _on_running_changed(self, running: bool) -> None:
+        self._set_toggle_button_state(running)
+        if running and self.controller.session_id is not None:
+            self._focus_active_session(self.controller.session_id)
+
+    def _focus_active_session(self, session_id: int) -> None:
+        for row in range(self.session_list.count()):
+            item = self.session_list.item(row)
+            if item is None:
+                continue
+            if item.data(Qt.ItemDataRole.UserRole) == session_id:
+                self.session_list.setCurrentRow(row)
+                self.session_list.scrollToItem(item, QAbstractItemView.ScrollHint.PositionAtTop)
+                break
+
     def _set_toggle_button_state(self, running: bool) -> None:
         if running:
-            self.toggle_button.setText("停止翻译")
+            self.toggle_button.setText("停止")
             self.toggle_button.setStyleSheet(
-                "QPushButton { background: #642b2b; border: 1px solid #8f4b4b; color: #fff1f1; border-radius: 10px; padding: 6px 12px; }"
+                "QPushButton { background: #642b2b; border: 1px solid #8f4b4b; color: #fff1f1; border-radius: 5px; font-size: 9px; padding: 2px 5px; }"
                 "QPushButton:hover { background: #7a3737; }"
             )
         else:
-            self.toggle_button.setText("开始翻译")
+            self.toggle_button.setText("开始")
             self.toggle_button.setStyleSheet(
-                "QPushButton { background: #1f5f4d; border: 1px solid #2c8a72; color: #effff9; border-radius: 10px; padding: 6px 12px; }"
+                "QPushButton { background: #1f5f4d; border: 1px solid #2c8a72; color: #effff9; border-radius: 5px; font-size: 9px; padding: 2px 5px; }"
                 "QPushButton:hover { background: #26765f; }"
             )
 
@@ -337,7 +401,10 @@ class MainWindow(QMainWindow):
         self._apply_main_window_on_top()
 
     def _toggle_overlay_visibility(self) -> None:
-        self._overlay_visible = not self._overlay_visible
+        self.set_overlay_visible(not self._overlay_visible)
+
+    def set_overlay_visible(self, visible: bool) -> None:
+        self._overlay_visible = visible
         if self._overlay_visible:
             self.overlay.show()
             self.overlay.raise_()
@@ -345,17 +412,32 @@ class MainWindow(QMainWindow):
             self.overlay.hide()
         self._apply_overlay_visibility_button_state()
 
+    def _apply_overlay_penetration_button_state(self) -> None:
+        """Lit style when subtitle is click-through; subdued when windowed (captures mouse)."""
+        if self.settings.overlay_mode == OverlayMode.CLICK_THROUGH:
+            self.overlay_button.setStyleSheet(
+                "QPushButton { background: #6b4a12; border: 1px solid #d4a017; color: #fff8e6; border-radius: 5px; "
+                "font-size: 9px; padding: 2px 5px; font-weight: 600; }"
+                "QPushButton:hover { background: #7d5a18; }"
+            )
+        else:
+            self.overlay_button.setStyleSheet(
+                "QPushButton { background: #17283b; border: 1px solid #31455b; color: #edf4ff; border-radius: 5px; "
+                "font-size: 9px; padding: 2px 5px; }"
+                "QPushButton:hover { background: #203349; }"
+            )
+
     def _apply_overlay_visibility_button_state(self) -> None:
         if self._overlay_visible:
-            self.overlay_visibility_button.setText("隐藏字幕")
+            self.overlay_visibility_button.setText("字幕关")
             self.overlay_visibility_button.setStyleSheet(
-                "QPushButton { background: #17283b; border: 1px solid #31455b; color: #edf4ff; border-radius: 10px; padding: 6px 12px; }"
+                "QPushButton { background: #17283b; border: 1px solid #31455b; color: #edf4ff; border-radius: 5px; font-size: 9px; padding: 2px 5px; }"
                 "QPushButton:hover { background: #203349; }"
             )
         else:
-            self.overlay_visibility_button.setText("显示字幕")
+            self.overlay_visibility_button.setText("字幕开")
             self.overlay_visibility_button.setStyleSheet(
-                "QPushButton { background: #243244; border: 1px solid #47617d; color: #edf4ff; border-radius: 10px; padding: 6px 12px; }"
+                "QPushButton { background: #243244; border: 1px solid #47617d; color: #edf4ff; border-radius: 5px; font-size: 9px; padding: 2px 5px; }"
                 "QPushButton:hover { background: #30445d; }"
             )
 
@@ -367,15 +449,47 @@ class MainWindow(QMainWindow):
         if self._main_window_on_top:
             self.pin_button.setText("取消置顶")
             self.pin_button.setStyleSheet(
-                "QPushButton { background: #5b4a18; border: 1px solid #8d7530; color: #fff4c7; border-radius: 10px; padding: 6px 12px; }"
+                "QPushButton { background: #5b4a18; border: 1px solid #8d7530; color: #fff4c7; border-radius: 5px; font-size: 9px; padding: 2px 5px; }"
                 "QPushButton:hover { background: #735d1d; }"
             )
         else:
-            self.pin_button.setText("置顶主屏")
+            self.pin_button.setText("置顶")
             self.pin_button.setStyleSheet(
-                "QPushButton { background: #17283b; border: 1px solid #31455b; color: #edf4ff; border-radius: 10px; padding: 6px 12px; }"
+                "QPushButton { background: #17283b; border: 1px solid #31455b; color: #edf4ff; border-radius: 5px; font-size: 9px; padding: 2px 5px; }"
                 "QPushButton:hover { background: #203349; }"
             )
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._sync_main_splitter_for_resize()
+
+    def _on_main_splitter_moved(self, _pos: int, _index: int) -> None:
+        self._session_panel_width = max(
+            self.session_list.minimumWidth(),
+            min(self.session_list.width(), self.session_list.maximumWidth()),
+        )
+
+    def _sync_main_splitter_for_resize(self) -> None:
+        sp = self._main_splitter
+        if sp is None or sp.width() < 1:
+            return
+        hw = sp.handleWidth()
+        total = sp.width()
+        left = int(
+            max(
+                self.session_list.minimumWidth(),
+                min(self._session_panel_width, self.session_list.maximumWidth()),
+            )
+        )
+        right = total - left - hw
+        min_right = 120
+        if right < min_right:
+            right = min_right
+            left = max(self.session_list.minimumWidth(), total - hw - right)
+        cur = sp.sizes()
+        if len(cur) == 2 and cur[0] == left and cur[1] == right:
+            return
+        sp.setSizes([left, right])
 
     def eventFilter(self, watched, event) -> bool:
         if watched is self.title_bar:
@@ -393,6 +507,51 @@ class MainWindow(QMainWindow):
     def _load_sessions(self) -> None:
         self._refresh_sessions(self.db.list_sessions())
 
+    def _session_list_context_menu(self, pos) -> None:
+        item = self.session_list.itemAt(pos)
+        if item is None:
+            return
+        self.session_list.setCurrentItem(item)
+        menu = QMenu(self)
+        delete_action = menu.addAction("删除记录")
+        chosen = menu.exec(self.session_list.mapToGlobal(pos))
+        if chosen is delete_action:
+            self._delete_selected_session()
+
+    def _delete_selected_session(self) -> None:
+        item = self.session_list.currentItem()
+        if item is None:
+            return
+        row = self.session_list.row(item)
+        session_id = item.data(Qt.ItemDataRole.UserRole)
+        if self.controller.session_id is not None and self.controller.session_id == session_id:
+            QMessageBox.warning(self, "无法删除", "当前会话正在翻译中，请先停止后再删除记录。")
+            return
+        reply = QMessageBox.question(
+            self,
+            "删除会话",
+            f"确定删除会话 #{session_id}？数据库中的该条记录将不可恢复。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.db.delete_session(session_id)
+        except ValueError:
+            QMessageBox.warning(self, "删除失败", "未找到该会话，可能已被删除。")
+            self.controller.session_changed.emit(self.db.list_sessions())
+            return
+        sessions = self.db.list_sessions()
+        self.controller.session_changed.emit(sessions)
+        if self.session_list.count() > 0:
+            pick = min(row, self.session_list.count() - 1)
+            self.session_list.setCurrentRow(pick)
+        else:
+            self.history_list.clear()
+            self._history_items_by_chunk.clear()
+            self._update_live_caption("", "")
+
     def _refresh_sessions(self, sessions: list[SessionRecord]) -> None:
         self.session_list.clear()
         for session in sessions:
@@ -408,8 +567,11 @@ class MainWindow(QMainWindow):
         session_id = item.data(Qt.ItemDataRole.UserRole)
         self.history_list.clear()
         self._history_items_by_chunk.clear()
-        for segment in self.db.list_segments(session_id):
+        segments = self.db.list_segments(session_id)
+        for segment in segments:
             self._upsert_segment(segment)
+        if not segments:
+            self.history_list.scrollToTop()
 
     def _upsert_segment(self, segment: SubtitleSegment) -> None:
         item_and_widget = self._history_items_by_chunk.get(segment.chunk_id)
@@ -426,7 +588,9 @@ class MainWindow(QMainWindow):
         card.update_segment(segment)
         list_item.setSizeHint(card.sizeHint())
         self.history_list.scrollToBottom()
-        self.stats_label.setText(f"音频帧: {self.controller.audio_packets_received} | 分块: {self.controller.chunks_dispatched}")
+        self.stats_label.setText(
+            f"帧:{self.controller.audio_packets_received}|块:{self.controller.chunks_dispatched}"
+        )
 
     def _find_chunk_row(self, chunk_id: int) -> int | None:
         item_and_widget = self._history_items_by_chunk.get(chunk_id)
@@ -472,8 +636,9 @@ class MainWindow(QMainWindow):
         self.secrets.set(self.settings.transcribe_api_key_name, dialog.transcribe_key_edit.text().strip())
         self.secrets.set(self.settings.translate_api_key_name, dialog.translate_key_edit.text().strip())
         self.overlay.set_overlay_mode(self.settings.overlay_mode)
-        self.mode_hint.setText(f"模式: {self.settings.recognition.mode.value}")
-        self.language_hint.setText(f"语言: {self.settings.recognition.source_language}")
+        self._refresh_recognition_hints()
+        self.language_hint.setText(f"语言: {self._language_label(self.settings.recognition.source_language)}")
+        self._apply_overlay_penetration_button_state()
         self._append_diagnostic("info", "设置已保存。")
 
     def _toggle_overlay_mode(self) -> None:
@@ -484,6 +649,7 @@ class MainWindow(QMainWindow):
         )
         self.overlay.set_overlay_mode(self.settings.overlay_mode)
         self.settings_manager.save(self.settings)
+        self._apply_overlay_penetration_button_state()
         self._append_diagnostic("info", f"悬浮层模式已切换为 {self.settings.overlay_mode.value}")
 
     def _show_error(self, error) -> None:
@@ -492,9 +658,22 @@ class MainWindow(QMainWindow):
 
     def _update_live_caption(self, source_line: str, translated_line: str) -> None:
         self.overlay.update_text(source_line, translated_line)
-        self.live_translation_label.setText(translated_line or "等待字幕...")
 
     def _append_diagnostic(self, level: str, message: str) -> None:
         stamp = datetime.now().strftime("%H:%M:%S")
         self.diagnostic_box.appendPlainText(f"[{stamp}] {level.upper()} {message}")
-        self.stats_label.setText(f"音频帧: {self.controller.audio_packets_received} | 分块: {self.controller.chunks_dispatched}")
+        self.stats_label.setText(
+            f"帧:{self.controller.audio_packets_received}|块:{self.controller.chunks_dispatched}"
+        )
+
+    def _language_label(self, language_code: str) -> str:
+        return self.LANGUAGE_LABELS.get(language_code, language_code)
+
+    def _refresh_recognition_hints(self) -> None:
+        m = self.RECOGNITION_MODE_LABELS.get(
+            self.settings.recognition.mode, self.settings.recognition.mode.value
+        )
+        s = self.TRANSLATION_STYLE_LABELS.get(
+            self.settings.recognition.translation_style, self.settings.recognition.translation_style.value
+        )
+        self.mode_hint.setText(f"识别:{m} | 风格:{s}")

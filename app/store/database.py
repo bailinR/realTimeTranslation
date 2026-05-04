@@ -95,6 +95,13 @@ class Database:
         )
         self.conn.commit()
 
+    def delete_session(self, session_id: int) -> None:
+        self.conn.execute("DELETE FROM segments WHERE session_id = ?", (session_id,))
+        cur = self.conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+        self.conn.commit()
+        if cur.rowcount == 0:
+            raise ValueError(f"session not found: {session_id}")
+
     def list_sessions(self) -> list[SessionRecord]:
         rows = self.conn.execute(
             "SELECT session_id, created_at, ended_at, mode, source_language FROM sessions ORDER BY session_id DESC"

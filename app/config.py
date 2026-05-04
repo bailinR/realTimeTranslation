@@ -6,7 +6,15 @@ from pathlib import Path
 
 from platformdirs import user_data_dir
 
-from app.models import AppPaths, AppSettings, AudioSourceConfig, OverlayMode, RecognitionConfig, RecognitionMode
+from app.models import (
+    AppPaths,
+    AppSettings,
+    AudioSourceConfig,
+    OverlayMode,
+    RecognitionConfig,
+    RecognitionMode,
+    TranslationStyle,
+)
 
 
 APP_NAME = "RealTimeTranslation"
@@ -38,17 +46,31 @@ class SettingsManager:
         raw = json.loads(self.path.read_text(encoding="utf-8"))
         audio = AudioSourceConfig(**raw.get("audio", {}))
         recognition_raw = dict(raw.get("recognition", {}))
-        mode_value = recognition_raw.get("mode", RecognitionMode.STEADY)
+        mode_value = recognition_raw.get("mode", RecognitionMode.PRECISE)
+        if isinstance(mode_value, RecognitionMode):
+            recognition_raw["mode"] = mode_value
+        else:
+            legacy = {"steady": RecognitionMode.PRECISE, "fast": RecognitionMode.REALTIME}
+            if str(mode_value) in legacy:
+                recognition_raw["mode"] = legacy[str(mode_value)]
+            else:
+                try:
+                    recognition_raw["mode"] = RecognitionMode(str(mode_value))
+                except ValueError:
+                    recognition_raw["mode"] = RecognitionMode.PRECISE
+        style_value = recognition_raw.get("translation_style", TranslationStyle.LIVE_COMMERCE)
         try:
-            recognition_raw["mode"] = mode_value if isinstance(mode_value, RecognitionMode) else RecognitionMode(str(mode_value))
+            recognition_raw["translation_style"] = (
+                style_value if isinstance(style_value, TranslationStyle) else TranslationStyle(str(style_value))
+            )
         except ValueError:
-            recognition_raw["mode"] = RecognitionMode.STEADY
+            recognition_raw["translation_style"] = TranslationStyle.LIVE_COMMERCE
         recognition = RecognitionConfig(**recognition_raw)
-        overlay_value = raw.get("overlay_mode", OverlayMode.CLICK_THROUGH)
+        overlay_value = raw.get("overlay_mode", OverlayMode.WINDOWED)
         try:
             overlay_mode = overlay_value if isinstance(overlay_value, OverlayMode) else OverlayMode(str(overlay_value))
         except ValueError:
-            overlay_mode = OverlayMode.CLICK_THROUGH
+            overlay_mode = OverlayMode.WINDOWED
         return AppSettings(
             audio=audio,
             recognition=recognition,
@@ -63,4 +85,5 @@ class SettingsManager:
         payload = asdict(settings)
         payload["overlay_mode"] = settings.overlay_mode.value
         payload["recognition"]["mode"] = settings.recognition.mode.value
+        payload["recognition"]["translation_style"] = settings.recognition.translation_style.value
         self.path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

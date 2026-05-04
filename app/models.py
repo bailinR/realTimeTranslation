@@ -7,8 +7,18 @@ from pathlib import Path
 
 
 class RecognitionMode(StrEnum):
-    STEADY = "steady"
-    FAST = "fast"
+    """precise=长窗口高准确；realtime=短窗口低延迟，并启用本地草稿+云端混合。"""
+
+    PRECISE = "precise"
+    REALTIME = "realtime"
+
+
+class TranslationStyle(StrEnum):
+    """翻译语气与场景。"""
+
+    LIVE_COMMERCE = "live_commerce"
+    COLLOQUIAL = "colloquial"
+    FORMAL = "formal"
 
 
 class SubtitleStatus(StrEnum):
@@ -31,17 +41,18 @@ class AudioSourceConfig:
 
 @dataclass(slots=True)
 class RecognitionConfig:
-    mode: RecognitionMode = RecognitionMode.STEADY
+    mode: RecognitionMode = RecognitionMode.PRECISE
+    translation_style: TranslationStyle = TranslationStyle.LIVE_COMMERCE
     source_language: str = "auto"
     transcribe_model: str = "qwen3-asr-flash"
     translate_model: str = "qwen-plus"
     base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     timeout_seconds: float = 30.0
     local_model_size: str = "small"
-    cloud_chunk_ms_steady: int = 3800
-    cloud_step_ms_steady: int = 3200
-    chunk_ms_fast: int = 2200
-    step_ms_fast: int = 1400
+    cloud_chunk_ms_steady: int = 3400
+    cloud_step_ms_steady: int = 2800
+    chunk_ms_fast: int = 1800
+    step_ms_fast: int = 1100
     cloud_fail_threshold: int = 3
 
 
@@ -49,7 +60,7 @@ class RecognitionConfig:
 class AppSettings:
     audio: AudioSourceConfig = field(default_factory=AudioSourceConfig)
     recognition: RecognitionConfig = field(default_factory=RecognitionConfig)
-    overlay_mode: OverlayMode = OverlayMode.CLICK_THROUGH
+    overlay_mode: OverlayMode = OverlayMode.WINDOWED
     export_dir: str = ""
     local_compute_type: str = "int8"
     transcribe_api_key_name: str = "default"

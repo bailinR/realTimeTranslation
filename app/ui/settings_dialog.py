@@ -11,10 +11,17 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from app.models import AppSettings, OverlayMode, RecognitionMode
+from app.models import AppSettings, OverlayMode, RecognitionMode, TranslationStyle
 
 
 class SettingsDialog(QDialog):
+    LANGUAGE_OPTIONS = [
+        ("自动检测", "auto"),
+        ("英语", "en"),
+        ("泰语", "th"),
+        ("越南语", "vi"),
+    ]
+
     def __init__(self, settings: AppSettings, transcribe_key: str, translate_key: str, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("设置")
@@ -30,11 +37,22 @@ class SettingsDialog(QDialog):
         self.timeout_spin.setRange(5, 120)
         self.timeout_spin.setValue(int(settings.recognition.timeout_seconds))
         self.language_combo = QComboBox()
-        self.language_combo.addItems(["auto", "th", "vi", "en"])
-        self.language_combo.setCurrentText(settings.recognition.source_language)
+        for label, value in self.LANGUAGE_OPTIONS:
+            self.language_combo.addItem(label, value)
+        current_language_index = self.language_combo.findData(settings.recognition.source_language)
+        if current_language_index >= 0:
+            self.language_combo.setCurrentIndex(current_language_index)
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems([RecognitionMode.STEADY.value, RecognitionMode.FAST.value])
-        self.mode_combo.setCurrentText(settings.recognition.mode.value)
+        self.mode_combo.addItem("精准模式（延迟略高，准确率高）", RecognitionMode.PRECISE)
+        self.mode_combo.addItem("实时模式（延迟低，准确率一般）", RecognitionMode.REALTIME)
+        idx = self.mode_combo.findData(settings.recognition.mode)
+        self.mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.style_combo = QComboBox()
+        self.style_combo.addItem("直播带货", TranslationStyle.LIVE_COMMERCE)
+        self.style_combo.addItem("口语", TranslationStyle.COLLOQUIAL)
+        self.style_combo.addItem("正式", TranslationStyle.FORMAL)
+        sidx = self.style_combo.findData(settings.recognition.translation_style)
+        self.style_combo.setCurrentIndex(sidx if sidx >= 0 else 0)
         self.overlay_combo = QComboBox()
         self.overlay_combo.addItems([OverlayMode.CLICK_THROUGH.value, OverlayMode.WINDOWED.value])
         self.overlay_combo.setCurrentText(settings.overlay_mode.value)
@@ -52,7 +70,8 @@ class SettingsDialog(QDialog):
         form.addRow("转写模型", self.transcribe_model_edit)
         form.addRow("翻译模型", self.translate_model_edit)
         form.addRow("源语言", self.language_combo)
-        form.addRow("模式", self.mode_combo)
+        form.addRow("识别模式", self.mode_combo)
+        form.addRow("翻译风格", self.style_combo)
         form.addRow("悬浮层模式", self.overlay_combo)
         form.addRow("超时(秒)", self.timeout_spin)
         form.addRow("", self.follow_default_check)
@@ -72,8 +91,13 @@ class SettingsDialog(QDialog):
         current.recognition.base_url = self.base_url_edit.text().strip()
         current.recognition.transcribe_model = self.transcribe_model_edit.text().strip()
         current.recognition.translate_model = self.translate_model_edit.text().strip()
-        current.recognition.source_language = self.language_combo.currentText()
-        current.recognition.mode = RecognitionMode(self.mode_combo.currentText())
+        current.recognition.source_language = self.language_combo.currentData()
+        mode = self.mode_combo.currentData()
+        style = self.style_combo.currentData()
+        current.recognition.mode = mode if isinstance(mode, RecognitionMode) else RecognitionMode.PRECISE
+        current.recognition.translation_style = (
+            style if isinstance(style, TranslationStyle) else TranslationStyle.LIVE_COMMERCE
+        )
         current.recognition.timeout_seconds = float(self.timeout_spin.value())
         current.audio.follow_default_output = self.follow_default_check.isChecked()
         current.recognition.local_model_size = self.local_model_edit.text().strip()

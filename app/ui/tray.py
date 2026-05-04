@@ -36,7 +36,4 @@ class AppTray:
         self.tray.show()
 
     def _toggle_overlay(self) -> None:
-        if self.window.overlay.isVisible():
-            self.window.overlay.hide()
-        else:
-            self.window.overlay.show()
+        self.window.set_overlay_visible(not self.window.overlay.isVisible())

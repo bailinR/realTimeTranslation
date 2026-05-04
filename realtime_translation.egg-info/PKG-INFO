@@ -46,6 +46,21 @@ pip install -e .[local-asr]
 realtime-translation
 ```
 
+如果你是在项目根目录直接启动，也可以用下面几种方式：
+
+```powershell
+.\.venv\Scripts\python.exe -m app.main
+.\.venv\Scripts\realtime-translation.exe
+.\start.ps1
+.\start.ps1 -Background
+```
+
+快捷启动：
+
+- 双击项目根目录的 [start.bat](D:/work/project/it/realTimeTranslation/start.bat)
+- 在 PowerShell 里运行 [start.ps1](D:/work/project/it/realTimeTranslation/start.ps1)
+- 若想直接后台拉起窗口，不占当前终端，可运行 `.\start.ps1 -Background`
+
 首次运行后：
 
 1. 在设置里填入 OpenAI-compatible `base_url`、`api_key`、转写模型、翻译模型

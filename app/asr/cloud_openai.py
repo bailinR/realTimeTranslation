@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable
 import httpx
 
 from app.models import AudioChunk, ProviderError, TranscriptResult
+from app.net_utils import summarize_httpx_exception
 
 
 class OpenAIChunkTranscriptionProvider:
@@ -40,6 +41,7 @@ class OpenAIChunkTranscriptionProvider:
         self.client = httpx.AsyncClient(
             timeout=self.timeout_seconds,
             headers={"Authorization": f"Bearer {self.api_key}"},
+            trust_env=False,
         )
         self.worker = asyncio.create_task(self._run())
 
@@ -89,14 +91,24 @@ class OpenAIChunkTranscriptionProvider:
                         )
                     )
             except httpx.HTTPStatusError as exc:
-                body = exc.response.text[:500] if exc.response is not None else ""
-                message = f"{exc} {body}".strip()
+                message = summarize_httpx_exception(exc)
+                await self.on_error(
+                    ProviderError(provider="cloud", code="transcription-failed", message=message, recoverable=True)
+                )
+            except httpx.RequestError as exc:
+                message = summarize_httpx_exception(exc)
                 await self.on_error(
                     ProviderError(provider="cloud", code="transcription-failed", message=message, recoverable=True)
                 )
             except Exception as exc:
+                self.logger.exception("Unexpected cloud transcription failure")
                 await self.on_error(
-                    ProviderError(provider="cloud", code="transcription-failed", message=str(exc), recoverable=True)
+                    ProviderError(
+                        provider="cloud",
+                        code="transcription-failed",
+                        message=summarize_httpx_exception(exc),
+                        recoverable=True,
+                    )
                 )
 
     def _use_dashscope_asr_compat(self) -> bool:

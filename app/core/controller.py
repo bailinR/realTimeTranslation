@@ -14,7 +14,7 @@ from app.config import AppPaths
 from app.core.chunking import ChunkScheduler
 from app.core.events import EventBus
 from app.core.language import LanguageLock
-from app.core.text_utils import compact_whitespace, remove_overlap
+from app.core.text_utils import compact_whitespace, remove_adjacent_overlap, remove_overlap
 from app.models import AppSettings, ProviderError, RecognitionMode, SubtitleSegment, SubtitleStatus, TranscriptResult
 from app.store.database import Database
 from app.store.settings_secrets import SecretStore
@@ -48,6 +48,7 @@ class AppController(QObject):
         self.segments_by_chunk: dict[int, SubtitleSegment] = {}
         self.final_source_history: list[str] = []
         self.final_translation_history: list[str] = []
+        self.last_final_source_text = ""
         self.cloud_failures = 0
         self.degraded_local_only = False
         self._lock = asyncio.Lock()
@@ -90,6 +91,7 @@ class AppController(QObject):
                 api_key=translate_key or api_key,
                 model=self.settings.recognition.translate_model,
                 timeout_seconds=self.settings.recognition.timeout_seconds,
+                style=self.settings.recognition.translation_style,
             )
             self.cloud_provider = OpenAIChunkTranscriptionProvider(
                 base_url=self.settings.recognition.base_url,
@@ -110,7 +112,7 @@ class AppController(QObject):
             self.audio_source = LoopbackAudioSource(self.settings.audio, self._handle_audio, self._handle_sync_error)
 
             await self.cloud_provider.start()
-            if self.settings.recognition.mode == RecognitionMode.FAST:
+            if self.settings.recognition.mode == RecognitionMode.REALTIME:
                 await self.local_provider.start()
 
             self.status_changed.emit("正在采集系统声音...")
@@ -150,6 +152,7 @@ class AppController(QObject):
         self.segments_by_chunk.clear()
         self.final_source_history.clear()
         self.final_translation_history.clear()
+        self.last_final_source_text = ""
         self.session_started_at = None
         self.language_lock = LanguageLock(self.settings.recognition.source_language)
         self.running_changed.emit(False)
@@ -173,7 +176,7 @@ class AppController(QObject):
             self.status_changed.emit("已接收到系统声音，正在分块识别...")
             self._log("info", f"已接收到第一帧系统声音，采样率={sample_rate}Hz，声道={channels}")
         if self.scheduler is None or self.scheduler.sample_rate != sample_rate:
-            if self.settings.recognition.mode == RecognitionMode.STEADY:
+            if self.settings.recognition.mode == RecognitionMode.PRECISE:
                 self.scheduler = ChunkScheduler(
                     sample_rate,
                     self.settings.recognition.mode,
@@ -197,7 +200,7 @@ class AppController(QObject):
 
     async def _dispatch_chunk(self, chunk) -> None:
         try:
-            if self.settings.recognition.mode == RecognitionMode.FAST and self.local_provider:
+            if self.settings.recognition.mode == RecognitionMode.REALTIME and self.local_provider:
                 await self.local_provider.push_audio(chunk)
             if self.cloud_provider and not self.degraded_local_only:
                 await self.cloud_provider.push_audio(chunk)
@@ -214,6 +217,8 @@ class AppController(QObject):
             previous = self.segments_by_chunk.get(result.chunk_id)
             if previous:
                 text = remove_overlap(previous.source_text, text)
+            elif result.is_final and self.last_final_source_text:
+                text = remove_adjacent_overlap(self.last_final_source_text, text)
             if not text:
                 return
             locked = self.language_lock.observe(result.source_lang)
@@ -242,6 +247,7 @@ class AppController(QObject):
             if result.provider == "cloud":
                 self.cloud_failures = 0
                 if status == SubtitleStatus.FINAL:
+                    self.last_final_source_text = segment.source_text
                     self.final_source_history.append(segment.source_text)
                     self.final_translation_history.append(segment.translated_text)
                     self.final_source_history = self.final_source_history[-5:]

@@ -9,8 +9,8 @@ class ChunkScheduler:
         self.mode = mode
         self._pcm = bytearray()
         self._next_chunk_id = 1
-        self._step_ms = step_ms or (3200 if mode == RecognitionMode.STEADY else 1400)
-        self._window_ms = window_ms or (3800 if mode == RecognitionMode.STEADY else 2200)
+        self._step_ms = step_ms or (3200 if mode == RecognitionMode.PRECISE else 1400)
+        self._window_ms = window_ms or (3800 if mode == RecognitionMode.PRECISE else 2200)
         self._last_emit_end_ms = 0
         self._total_ms = 0
 

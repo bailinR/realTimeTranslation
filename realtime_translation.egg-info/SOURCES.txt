@@ -5,6 +5,7 @@ app/config.py
 app/logging_config.py
 app/main.py
 app/models.py
+app/net_utils.py
 app/asr/__init__.py
 app/asr/base.py
 app/asr/cloud_openai.py
@@ -36,4 +37,5 @@ realtime_translation.egg-info/entry_points.txt
 realtime_translation.egg-info/requires.txt
 realtime_translation.egg-info/top_level.txt
 tests/test_database.py
+tests/test_net_utils.py
 tests/test_text_utils.py
