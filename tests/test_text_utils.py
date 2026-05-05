@@ -14,3 +14,11 @@ def test_remove_adjacent_overlap_for_neighbor_chunks():
     current = "test this camera in the rain and see whether it still works"
 
     assert remove_adjacent_overlap(previous, current) == "and see whether it still works"
+
+
+def test_remove_adjacent_overlap_case_insensitive():
+    assert remove_adjacent_overlap("home at twelve p.m.", "Twelve p.m. yeah next") == "yeah next"
+
+
+def test_remove_adjacent_overlap_recently_i():
+    assert remove_adjacent_overlap("lately recently I", "Recently I wake up early") == "wake up early"

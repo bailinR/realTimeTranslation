@@ -60,7 +60,8 @@ class RecognitionConfig:
     source_language: str = "auto"
     transcribe_model: str = "qwen3-asr-flash"
     translate_model: str = "qwen-plus"
-    base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    transcribe_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    translate_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     timeout_seconds: float = 30.0
     local_model_size: str = "small"
     cloud_chunk_ms_steady: int = 3400
@@ -77,8 +78,8 @@ class AppSettings:
     overlay_mode: OverlayMode = OverlayMode.WINDOWED
     export_dir: str = ""
     local_compute_type: str = "int8"
-    transcribe_api_key_name: str = "default"
-    translate_api_key_name: str = "default"
+    transcribe_api_key_name: str = "transcribe"
+    translate_api_key_name: str = "translate"
 
 
 @dataclass(slots=True)

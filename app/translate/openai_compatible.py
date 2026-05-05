@@ -20,10 +20,13 @@ def parse_translation_table_lines(text: str, *, max_lines: int = 48) -> list[str
 
 
 _DOMAIN_HINTS: dict[TranslationDomain, str] = {
-    TranslationDomain.NONE: "",
+    TranslationDomain.NONE: (
+        "【领域：未指定】通用翻译；若是美妆/带货直播，建议在设置里改为「美妆护肤」以获得更贴合的用词。"
+    ),
     TranslationDomain.BEAUTY: (
-        "【领域：美妆护肤】优先使用美妆直播常见说法；成分、肤质、妆效、色号、质地、功效宣称等用词准确，"
-        "避免把化妆术语译成泛化日常词。"
+        "【领域：美妆护肤】口红、唇釉、套装、散粉、高亮、小样、买赠、色号、妆效等直播常用说法要贴切；"
+        "lip kit / lip duo / double lipstick 等指「双支唇妆/唇彩组合」等，勿译成「唇部步骤」「蝙蝠」等与语境无关的说法。"
+        "成分与功效宣称与源句对齐，避免把化妆术语泛化成日常词；若英文疑似同音误识（如 bat 实为 bag/pack、bat 在化妆品语境），优先按美妆包装/产品义项理解后再译。"
     ),
     TranslationDomain.FASHION: (
         "【领域：服饰鞋包】版型、面料、尺码、洗护与穿搭场景用语准确，品牌与系列名与表内译法一致。"
@@ -132,6 +135,16 @@ class OpenAICompatibleTranslator:
             "避免俚语与夸张促销话术，数字与专有名词准确。"
         )
 
+    def _quality_block(self) -> str:
+        return (
+            "【译文质量】"
+            "称谓：结合源语线索选「先生/女士/小姐」等，有女性身份或母职/女主播语境时不要默认「先生」。"
+            "线上线下：源语表示网购、官网、直播链接、online、ออนไลน์、e-commerce 等时译为「线上/在线/网上」，不要反义成「线下」。"
+            "地名：尽量使用通行中文译名；无把握时音译并在全篇保持一致。"
+            "去重：禁止「也也是」「的的」等赘余叠词；若本句与上文高度同义，可压缩措辞，但勿删掉本句相对上文的新信息。"
+            "听写疑点：残句或疑似听错时，在带货语境下可优先选择合理的商品/包装义项，勿引入与画面无关的荒诞引申。"
+        )
+
     def _system_prompt(self) -> str:
         base = (
             "你是直播实时字幕翻译助手。"
@@ -148,7 +161,7 @@ class OpenAICompatibleTranslator:
                 "术语、数字、否定与语气尽量与源句对齐；不确定处保留原词或音译，勿凭空虚构。"
                 "少用过度压缩的短词导致信息缺失。"
             )
-        parts: list[str] = [base]
+        parts: list[str] = [base, self._quality_block()]
         domain = _DOMAIN_HINTS.get(self.translation_domain, "")
         if domain:
             parts.append(domain)

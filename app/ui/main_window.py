@@ -396,7 +396,7 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
         self.db.delete_all_sessions()
-        self.controller.session_changed.emit(self.db.list_sessions())
+        self.controller.session_changed.emit((self.db.list_sessions(), None))
         self.history_list.clear()
         self._history_items_by_chunk.clear()
         self._update_live_caption("", "")
@@ -585,7 +585,7 @@ class MainWindow(QMainWindow):
         return super().eventFilter(watched, event)
 
     def _load_sessions(self) -> None:
-        self._refresh_sessions(self.db.list_sessions())
+        self._refresh_sessions((self.db.list_sessions(), None))
 
     def _session_list_context_menu(self, pos) -> None:
         item = self.session_list.itemAt(pos)
@@ -620,25 +620,46 @@ class MainWindow(QMainWindow):
             self.db.delete_session(session_id)
         except ValueError:
             QMessageBox.warning(self, "删除失败", "未找到该会话，可能已被删除。")
-            self.controller.session_changed.emit(self.db.list_sessions())
+            self.controller.session_changed.emit((self.db.list_sessions(), None))
             return
         sessions = self.db.list_sessions()
-        self.controller.session_changed.emit(sessions)
-        if self.session_list.count() > 0:
-            pick = min(row, self.session_list.count() - 1)
-            self.session_list.setCurrentRow(pick)
-        else:
-            self.history_list.clear()
-            self._history_items_by_chunk.clear()
-            self._update_live_caption("", "")
+        pick_id = None
+        if sessions:
+            pick_row = min(row, len(sessions) - 1)
+            pick_id = sessions[pick_row].session_id
+        self.controller.session_changed.emit((sessions, pick_id))
 
-    def _refresh_sessions(self, sessions: list[SessionRecord]) -> None:
+    def _refresh_sessions(self, payload: object) -> None:
+        if isinstance(payload, tuple) and len(payload) == 2:
+            sessions, select_session_id = payload[0], payload[1]
+        else:
+            sessions = payload  # type: ignore[assignment]
+            select_session_id = None
+        self.session_list.blockSignals(True)
         self.session_list.clear()
         for session in sessions:
             label = f"#{session.session_id} {session.created_at:%m-%d %H:%M} {session.mode}/{session.source_language}"
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, session.session_id)
             self.session_list.addItem(item)
+        row_to_select = -1
+        if select_session_id is not None:
+            for row in range(self.session_list.count()):
+                it = self.session_list.item(row)
+                if it is not None and it.data(Qt.ItemDataRole.UserRole) == select_session_id:
+                    row_to_select = row
+                    break
+        if row_to_select < 0 and self.session_list.count() > 0:
+            row_to_select = 0
+        if row_to_select >= 0:
+            self.session_list.setCurrentRow(row_to_select)
+        self.session_list.blockSignals(False)
+        if row_to_select >= 0:
+            self._load_selected_session()
+        elif not sessions:
+            self.history_list.clear()
+            self._history_items_by_chunk.clear()
+            self._update_live_caption("", "")
 
     def _load_selected_session(self) -> None:
         item = self.session_list.currentItem()
@@ -715,8 +736,17 @@ class MainWindow(QMainWindow):
             return
         self.settings = dialog.build_settings(self.settings)
         self.settings_manager.save(self.settings)
-        self.secrets.set(self.settings.transcribe_api_key_name, dialog.transcribe_key_edit.text().strip())
-        self.secrets.set(self.settings.translate_api_key_name, dialog.translate_key_edit.text().strip())
+        transcribe_raw = dialog.transcribe_key_edit.text().strip()
+        translate_raw = dialog.translate_key_edit.text().strip()
+        self.secrets.set(self.settings.transcribe_api_key_name, transcribe_raw)
+        if dialog.share_translate_with_transcribe:
+            self.secrets.delete(self.settings.translate_api_key_name)
+        else:
+            self.secrets.set(self.settings.translate_api_key_name, translate_raw)
+        if self.settings.transcribe_api_key_name != "default" and self.settings.translate_api_key_name != "default":
+            self.secrets.delete("default")
+        if not transcribe_raw and not translate_raw:
+            self.secrets.delete("default")
         self.overlay.set_overlay_mode(self.settings.overlay_mode)
         self._refresh_recognition_hints()
         self.language_hint.setText(f"语言: {self._language_label(self.settings.recognition.source_language)}")

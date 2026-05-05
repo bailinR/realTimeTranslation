@@ -73,6 +73,16 @@ class SettingsManager:
             )
         except ValueError:
             recognition_raw["translation_domain"] = TranslationDomain.BEAUTY
+        legacy_base_url = recognition_raw.get("base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+        transcribe_base_url = recognition_raw.get("transcribe_base_url", legacy_base_url)
+        translate_base_url = recognition_raw.get("translate_base_url", legacy_base_url)
+        recognition_raw["transcribe_base_url"] = (
+            transcribe_base_url if isinstance(transcribe_base_url, str) else str(legacy_base_url)
+        )
+        recognition_raw["translate_base_url"] = (
+            translate_base_url if isinstance(translate_base_url, str) else str(legacy_base_url)
+        )
+        recognition_raw.pop("base_url", None)
         recognition_raw.setdefault("translation_glossary", "")
         recognition_raw.setdefault("translation_names", "")
         if not isinstance(recognition_raw.get("translation_glossary"), str):
@@ -85,14 +95,19 @@ class SettingsManager:
             overlay_mode = overlay_value if isinstance(overlay_value, OverlayMode) else OverlayMode(str(overlay_value))
         except ValueError:
             overlay_mode = OverlayMode.WINDOWED
+        transcribe_api_key_name = raw.get("transcribe_api_key_name", "transcribe")
+        translate_api_key_name = raw.get("translate_api_key_name", "translate")
+        if transcribe_api_key_name == "default" and translate_api_key_name == "default":
+            transcribe_api_key_name = "transcribe"
+            translate_api_key_name = "translate"
         return AppSettings(
             audio=audio,
             recognition=recognition,
             overlay_mode=overlay_mode,
             export_dir=raw.get("export_dir", ""),
             local_compute_type=raw.get("local_compute_type", "int8"),
-            transcribe_api_key_name=raw.get("transcribe_api_key_name", "default"),
-            translate_api_key_name=raw.get("translate_api_key_name", "default"),
+            transcribe_api_key_name=transcribe_api_key_name,
+            translate_api_key_name=translate_api_key_name,
         )
 
     def save(self, settings: AppSettings) -> None:
@@ -101,4 +116,5 @@ class SettingsManager:
         payload["recognition"]["mode"] = settings.recognition.mode.value
         payload["recognition"]["translation_style"] = settings.recognition.translation_style.value
         payload["recognition"]["translation_domain"] = settings.recognition.translation_domain.value
+        payload["recognition"].pop("base_url", None)
         self.path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

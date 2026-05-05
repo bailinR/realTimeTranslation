@@ -58,11 +58,15 @@ class AppController(QObject):
         self.chunks_dispatched = 0
         self._health_task: asyncio.Task | None = None
         self._warned_no_audio = False
+        self._run_generation = 0
+        self._active_transcribe_key_tail = ""
+        self._active_translate_key_tail = ""
 
     async def start(self) -> None:
         if self.session_id is not None:
             return
         try:
+            self._run_generation += 1
             self.loop = asyncio.get_running_loop()
             self.audio_packets_received = 0
             self.chunks_dispatched = 0
@@ -76,6 +80,8 @@ class AppController(QObject):
                     ProviderError(provider="config", code="missing-transcribe-key", message="缺少转写 API Key，请先打开设置填写。", recoverable=False)
                 )
                 return
+            self._active_transcribe_key_tail = self._key_tail(api_key)
+            self._active_translate_key_tail = self._key_tail(translate_key or api_key)
             if not translate_key:
                 self._log("warning", "未单独填写翻译 API Key，当前复用转写 API Key。")
 
@@ -84,10 +90,10 @@ class AppController(QObject):
                 source_language=self.settings.recognition.source_language,
             )
             self.language_lock = LanguageLock(self.settings.recognition.source_language)
-            self.session_changed.emit(self.db.list_sessions())
+            self.session_changed.emit((self.db.list_sessions(), self.session_id))
 
             self.translator = OpenAICompatibleTranslator(
-                base_url=self.settings.recognition.base_url,
+                base_url=self.settings.recognition.translate_base_url,
                 api_key=translate_key or api_key,
                 model=self.settings.recognition.translate_model,
                 timeout_seconds=self.settings.recognition.timeout_seconds,
@@ -98,7 +104,7 @@ class AppController(QObject):
                 names_text=self.settings.recognition.translation_names,
             )
             self.cloud_provider = OpenAIChunkTranscriptionProvider(
-                base_url=self.settings.recognition.base_url,
+                base_url=self.settings.recognition.transcribe_base_url,
                 api_key=api_key,
                 model=self.settings.recognition.transcribe_model,
                 language=self.settings.recognition.source_language,
@@ -124,6 +130,8 @@ class AppController(QObject):
                 "info",
                 f"会话已启动，模式={self.settings.recognition.mode.value}，语言={self.settings.recognition.source_language}，转写模型={self.settings.recognition.transcribe_model}，翻译模型={self.settings.recognition.translate_model}",
             )
+            self._log("info", f"转写配置: {self._provider_context('cloud')}")
+            self._log("info", f"翻译配置: {self._provider_context('translator')}")
             await self.audio_source.start()
             self._log("info", f"已打开回环设备：{self.audio_source.device_name}")
             self.running_changed.emit(True)
@@ -137,6 +145,7 @@ class AppController(QObject):
     async def stop(self) -> None:
         if self.session_id is None:
             return
+        self._run_generation += 1
         if self._health_task:
             self._health_task.cancel()
             self._health_task = None
@@ -148,8 +157,9 @@ class AppController(QObject):
             await self.local_provider.stop()
         if self.translator:
             await self.translator.aclose()
-        self.db.end_session(self.session_id)
-        self.session_changed.emit(self.db.list_sessions())
+        ended_session_id = self.session_id
+        self.db.end_session(ended_session_id)
+        self.session_changed.emit((self.db.list_sessions(), ended_session_id))
         self.status_changed.emit("已停止")
         self.session_id = None
         self.scheduler = None
@@ -159,6 +169,8 @@ class AppController(QObject):
         self.last_final_source_text = ""
         self.session_started_at = None
         self.language_lock = LanguageLock(self.settings.recognition.source_language)
+        self._active_transcribe_key_tail = ""
+        self._active_translate_key_tail = ""
         self.running_changed.emit(False)
         self._log("info", "会话已停止。")
 
@@ -217,17 +229,21 @@ class AppController(QObject):
         async with self._lock:
             if self.session_id is None:
                 return
+            run_generation = self._run_generation
             text = compact_whitespace(result.text)
             previous = self.segments_by_chunk.get(result.chunk_id)
             if previous:
                 text = remove_overlap(previous.source_text, text)
-            elif result.is_final and self.last_final_source_text:
+            elif self.last_final_source_text:
+                # 新 chunk 的首条可能是草稿：也要相对「上一句定稿」去重，否则句尾/下句头会整段重复
                 text = remove_adjacent_overlap(self.last_final_source_text, text)
             if not text:
                 return
             locked = self.language_lock.observe(result.source_lang)
             effective_lang = locked or result.source_lang or "auto"
             translated = await self._translate(text, effective_lang)
+            if self.session_id is None or run_generation != self._run_generation:
+                return
             status = SubtitleStatus.FINAL if result.is_final else SubtitleStatus.DRAFT
             session_started_at = self.session_started_at or datetime.now()
             segment = SubtitleSegment(
@@ -250,10 +266,12 @@ class AppController(QObject):
 
             if result.provider == "cloud":
                 self.cloud_failures = 0
-                if status == SubtitleStatus.FINAL:
-                    self.last_final_source_text = segment.source_text
+            if status == SubtitleStatus.FINAL:
+                self.last_final_source_text = segment.source_text
+                if result.provider == "cloud":
                     self.final_source_history.append(segment.source_text)
-                    self.final_translation_history.append(segment.translated_text)
+                    if segment.translated_text:
+                        self.final_translation_history.append(segment.translated_text)
                     self.final_source_history = self.final_source_history[-5:]
                     self.final_translation_history = self.final_translation_history[-5:]
             self._update_overlay(segment)
@@ -272,11 +290,13 @@ class AppController(QObject):
             await self._handle_error(
                 ProviderError(provider="translator", code="translate-failed", message=str(exc), recoverable=True)
             )
-            return text
+            return ""
 
     async def _handle_error(self, error: ProviderError) -> None:
         self.error_occurred.emit(error)
         self._log("error", f"{error.provider}/{error.code}: {error.message}")
+        if error.provider in {"cloud", "translator"}:
+            self._log("error", f"{error.provider} config: {self._provider_context(error.provider)}")
         if error.provider == "cloud":
             self.cloud_failures += 1
             if self.cloud_failures >= self.settings.recognition.cloud_fail_threshold:
@@ -311,3 +331,27 @@ class AppController(QObject):
     def _log(self, level: str, message: str) -> None:
         self.logger.info("[%s] %s", level.upper(), message)
         self.diagnostic_logged.emit(level, message)
+
+    @staticmethod
+    def _key_tail(value: str) -> str:
+        key = (value or "").strip()
+        if not key:
+            return "empty"
+        if len(key) <= 4:
+            return key
+        return key[-4:]
+
+    def _provider_context(self, provider: str) -> str:
+        if provider == "cloud":
+            return (
+                f"url={self.settings.recognition.transcribe_base_url}, "
+                f"model={self.settings.recognition.transcribe_model}, "
+                f"key_last4={self._active_transcribe_key_tail or 'empty'}"
+            )
+        if provider == "translator":
+            return (
+                f"url={self.settings.recognition.translate_base_url}, "
+                f"model={self.settings.recognition.translate_model}, "
+                f"key_last4={self._active_translate_key_tail or 'empty'}"
+            )
+        return "unknown"
