@@ -9,6 +9,11 @@ from app.core.controller import AppController
 from app.ui.main_window import MainWindow
 
 
+async def _pause_if_running(controller: AppController) -> None:
+    if controller.pipeline_running:
+        await controller.pause()
+
+
 class AppTray:
     def __init__(self, window: MainWindow, controller: AppController) -> None:
         self.window = window
@@ -17,13 +22,13 @@ class AppTray:
         self.tray = QSystemTrayIcon(icon, window)
         menu = QMenu()
         show_action = QAction("显示主窗口", window)
-        start_action = QAction("开始翻译", window)
-        stop_action = QAction("停止", window)
+        start_action = QAction("开始/继续", window)
+        stop_action = QAction("暂停", window)
         overlay_action = QAction("显示/隐藏悬浮窗", window)
         quit_action = QAction("退出", window)
         show_action.triggered.connect(window.showNormal)
         start_action.triggered.connect(lambda: asyncio.create_task(controller.start()))
-        stop_action.triggered.connect(lambda: asyncio.create_task(controller.stop()))
+        stop_action.triggered.connect(lambda: asyncio.create_task(_pause_if_running(controller)))
         overlay_action.triggered.connect(self._toggle_overlay)
         quit_action.triggered.connect(QApplication.quit)
         menu.addAction(show_action)

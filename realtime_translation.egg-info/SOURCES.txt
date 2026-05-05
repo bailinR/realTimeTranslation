@@ -26,6 +26,7 @@ app/translate/__init__.py
 app/translate/base.py
 app/translate/openai_compatible.py
 app/ui/__init__.py
+app/ui/app_theme.py
 app/ui/main_window.py
 app/ui/overlay.py
 app/ui/settings_dialog.py
@@ -36,6 +37,9 @@ realtime_translation.egg-info/dependency_links.txt
 realtime_translation.egg-info/entry_points.txt
 realtime_translation.egg-info/requires.txt
 realtime_translation.egg-info/top_level.txt
+tests/test_controller.py
 tests/test_database.py
 tests/test_net_utils.py
+tests/test_settings_secrets.py
 tests/test_text_utils.py
+tests/test_translate_config.py

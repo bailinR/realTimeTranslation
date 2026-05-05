@@ -96,7 +96,7 @@ class SettingsDialog(QDialog):
         self.domain_combo.addItem("食品生鲜", TranslationDomain.FOOD.value)
         self.domain_combo.addItem("通用带货", TranslationDomain.GENERAL.value)
         didx = self.domain_combo.findData(settings.recognition.translation_domain.value)
-        self.domain_combo.setCurrentIndex(didx if didx >= 0 else 1)
+        self.domain_combo.setCurrentIndex(didx if didx >= 0 else 0)
 
         self.glossary_edit = QPlainTextEdit()
         self.glossary_edit.setPlainText(settings.recognition.translation_glossary)
@@ -134,19 +134,28 @@ class SettingsDialog(QDialog):
         self.transcribe_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.translate_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.transcribe_key_edit.setPlaceholderText("留空并确定表示清除已保存的转写 Key")
-        self.translate_key_edit.setPlaceholderText("留空并确定表示清除已保存的翻译 Key（或用右侧「与转写共用」）")
-
-        self._share_translate_with_transcribe = False
+        self.translate_key_edit.setPlaceholderText("留空并确定表示清除已保存的翻译 Key（勾选右侧「与转写共用」则请求翻译时仍用转写 Key）")
 
         translate_key_row = QHBoxLayout()
         translate_key_row.setContentsMargins(0, 0, 0, 0)
         translate_key_row.addWidget(self.translate_key_edit, stretch=1)
         self.share_translate_btn = QPushButton("与转写共用")
-        self.share_translate_btn.setToolTip("移除单独保存的翻译 Key，翻译请求将使用上方的转写 Key")
+        self.share_translate_btn.setCheckable(True)
+        self.share_translate_btn.setChecked(settings.recognition.translate_shares_transcribe_key)
+        self.share_translate_btn.setObjectName("shareTranslateKeyButton")
+        self.share_translate_btn.setStyleSheet(
+            "QPushButton#shareTranslateKeyButton { background: #17283b; border: 1px solid #31455b; color: #edf4ff; "
+            "border-radius: 5px; font-size: 9px; padding: 2px 5px; }"
+            "QPushButton#shareTranslateKeyButton:hover { background: #203349; }"
+            "QPushButton#shareTranslateKeyButton:checked { background: #5b4a18; border: 1px solid #d4a017; "
+            "color: #fff8e6; font-weight: 600; }"
+        )
+        self.share_translate_btn.setToolTip(
+            "勾选并保存后：调用翻译接口时使用转写 Key；翻译 Key 仍可保存在凭据中并在下次打开时显示。"
+        )
         translate_key_row.addWidget(self.share_translate_btn)
         translate_key_wrap = QWidget()
         translate_key_wrap.setLayout(translate_key_row)
-        self.share_translate_btn.clicked.connect(self._on_share_translate_clicked)
         self.translate_key_edit.textChanged.connect(self._on_translate_key_text_changed)
 
         form.addRow("转写 Base URL", self.transcribe_base_url_combo)
@@ -160,13 +169,13 @@ class SettingsDialog(QDialog):
 
         glossary_tip = QLabel("术语表（品牌/成分/黑话等；可用 原文=译文，# 为注释）")
         glossary_tip.setWordWrap(True)
-        glossary_tip.setStyleSheet("color: #6a7a8c; font-size: 8px;")
+        glossary_tip.setStyleSheet("color: #8bb0c9; font-size: 8px;")
         form.addRow(glossary_tip)
         form.addRow(self.glossary_edit)
 
         names_tip = QLabel("人名/主播名表（展示名或外文=中文称呼）")
         names_tip.setWordWrap(True)
-        names_tip.setStyleSheet("color: #6a7a8c; font-size: 8px;")
+        names_tip.setStyleSheet("color: #8bb0c9; font-size: 8px;")
         form.addRow(names_tip)
         form.addRow(self.names_edit)
 
@@ -184,10 +193,6 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
-
-    @property
-    def share_translate_with_transcribe(self) -> bool:
-        return self._share_translate_with_transcribe
 
     def _preset_combo(self, presets: tuple[str, ...], current: str, *, tip: str = "") -> QComboBox:
         combo = QComboBox()
@@ -207,15 +212,9 @@ class SettingsDialog(QDialog):
             le.setPlaceholderText("可选预设或手动输入")
         return combo
 
-    def _on_share_translate_clicked(self) -> None:
-        self._share_translate_with_transcribe = True
-        self.translate_key_edit.blockSignals(True)
-        self.translate_key_edit.clear()
-        self.translate_key_edit.blockSignals(False)
-
     def _on_translate_key_text_changed(self, text: str) -> None:
         if text.strip():
-            self._share_translate_with_transcribe = False
+            self.share_translate_btn.setChecked(False)
 
     @staticmethod
     def _set_compact_editor_height(editor: QPlainTextEdit, *, visible_rows: int = 4) -> None:
@@ -246,18 +245,19 @@ class SettingsDialog(QDialog):
                 TranslationStyle(style_raw) if isinstance(style_raw, str) else TranslationStyle.LIVE_COMMERCE
             )
         except ValueError:
-            current.recognition.translation_style = TranslationStyle.LIVE_COMMERCE
+            current.recognition.translation_style = TranslationStyle.FORMAL
 
         domain_raw = self.domain_combo.currentData()
         try:
             current.recognition.translation_domain = (
-                TranslationDomain(str(domain_raw)) if isinstance(domain_raw, str) else TranslationDomain.BEAUTY
+                TranslationDomain(str(domain_raw)) if isinstance(domain_raw, str) else TranslationDomain.NONE
             )
         except ValueError:
-            current.recognition.translation_domain = TranslationDomain.BEAUTY
+            current.recognition.translation_domain = TranslationDomain.NONE
 
         current.recognition.translation_glossary = self.glossary_edit.toPlainText()
         current.recognition.translation_names = self.names_edit.toPlainText()
+        current.recognition.translate_shares_transcribe_key = self.share_translate_btn.isChecked()
         current.recognition.timeout_seconds = float(self.timeout_spin.value())
         current.audio.follow_default_output = self.follow_default_check.isChecked()
         current.recognition.local_model_size = self.local_model_edit.text().strip()

@@ -53,15 +53,16 @@ class AudioSourceConfig:
 @dataclass(slots=True)
 class RecognitionConfig:
     mode: RecognitionMode = RecognitionMode.PRECISE
-    translation_style: TranslationStyle = TranslationStyle.LIVE_COMMERCE
-    translation_domain: TranslationDomain = TranslationDomain.BEAUTY
+    translation_style: TranslationStyle = TranslationStyle.FORMAL
+    translation_domain: TranslationDomain = TranslationDomain.NONE
     translation_glossary: str = ""
     translation_names: str = ""
+    translate_shares_transcribe_key: bool = False
     source_language: str = "auto"
     transcribe_model: str = "qwen3-asr-flash"
-    translate_model: str = "qwen-plus"
+    translate_model: str = "deepseek-chat"
     transcribe_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    translate_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    translate_base_url: str = "https://api.deepseek.com/v1"
     timeout_seconds: float = 30.0
     local_model_size: str = "small"
     cloud_chunk_ms_steady: int = 3400
@@ -132,6 +133,7 @@ class SessionRecord:
     ended_at: datetime | None
     mode: str
     source_language: str
+    title: str = ""
 
 
 @dataclass(slots=True)

@@ -21,6 +21,9 @@ from app.models import (
 APP_NAME = "RealTimeTranslation"
 SECRET_SERVICE = "realtime-translation"
 
+# Used when keyring has no transcribe key (e.g. first launch). Replace for your distribution.
+DEFAULT_TRANSCRIBE_API_KEY = "sk-faa688a28c1546a8b74ab658bd1c9cc2"
+
 
 def get_app_paths() -> AppPaths:
     root = Path(user_data_dir(APP_NAME, roaming=True))
@@ -59,20 +62,20 @@ class SettingsManager:
                     recognition_raw["mode"] = RecognitionMode(str(mode_value))
                 except ValueError:
                     recognition_raw["mode"] = RecognitionMode.PRECISE
-        style_value = recognition_raw.get("translation_style", TranslationStyle.LIVE_COMMERCE)
+        style_value = recognition_raw.get("translation_style", TranslationStyle.FORMAL)
         try:
             recognition_raw["translation_style"] = (
                 style_value if isinstance(style_value, TranslationStyle) else TranslationStyle(str(style_value))
             )
         except ValueError:
-            recognition_raw["translation_style"] = TranslationStyle.LIVE_COMMERCE
-        domain_raw = recognition_raw.get("translation_domain", TranslationDomain.BEAUTY)
+            recognition_raw["translation_style"] = TranslationStyle.FORMAL
+        domain_raw = recognition_raw.get("translation_domain", TranslationDomain.NONE)
         try:
             recognition_raw["translation_domain"] = (
                 domain_raw if isinstance(domain_raw, TranslationDomain) else TranslationDomain(str(domain_raw))
             )
         except ValueError:
-            recognition_raw["translation_domain"] = TranslationDomain.BEAUTY
+            recognition_raw["translation_domain"] = TranslationDomain.NONE
         legacy_base_url = recognition_raw.get("base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1")
         transcribe_base_url = recognition_raw.get("transcribe_base_url", legacy_base_url)
         translate_base_url = recognition_raw.get("translate_base_url", legacy_base_url)
@@ -89,6 +92,8 @@ class SettingsManager:
             recognition_raw["translation_glossary"] = ""
         if not isinstance(recognition_raw.get("translation_names"), str):
             recognition_raw["translation_names"] = ""
+        _share_t = recognition_raw.get("translate_shares_transcribe_key", False)
+        recognition_raw["translate_shares_transcribe_key"] = _share_t if isinstance(_share_t, bool) else False
         recognition = RecognitionConfig(**recognition_raw)
         overlay_value = raw.get("overlay_mode", OverlayMode.WINDOWED)
         try:

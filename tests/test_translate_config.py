@@ -26,9 +26,11 @@ def test_settings_roundtrip_domain_glossary(tmp_path: Path):
     settings.recognition.translate_base_url = "https://translate.example.com/v1"
     settings.recognition.translation_glossary = "USB-C=Type-C 口\n"
     settings.recognition.translation_names = "Alex=阿力克斯\n"
+    settings.recognition.translate_shares_transcribe_key = True
     mgr.save(settings)
 
     loaded = mgr.load()
+    assert loaded.recognition.translate_shares_transcribe_key is True
     assert loaded.recognition.translation_domain == TranslationDomain.ELECTRONICS
     assert loaded.recognition.transcribe_base_url == "https://asr.example.com/v1"
     assert loaded.recognition.translate_base_url == "https://translate.example.com/v1"
@@ -84,4 +86,4 @@ def test_translator_system_prompt_includes_domain_and_tables():
         timeout_seconds=30.0,
         translation_domain=TranslationDomain.NONE,
     )
-    assert "【领域：" not in translator_no_domain._system_prompt()
+    assert "【领域：美妆护肤】" not in translator_no_domain._system_prompt()

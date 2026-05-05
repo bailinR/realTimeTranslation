@@ -4,11 +4,19 @@ from app.models import AudioChunk, RecognitionMode
 
 
 class ChunkScheduler:
-    def __init__(self, sample_rate: int, mode: RecognitionMode, *, step_ms: int | None = None, window_ms: int | None = None) -> None:
+    def __init__(
+        self,
+        sample_rate: int,
+        mode: RecognitionMode,
+        *,
+        step_ms: int | None = None,
+        window_ms: int | None = None,
+        next_chunk_id_start: int = 1,
+    ) -> None:
         self.sample_rate = sample_rate
         self.mode = mode
         self._pcm = bytearray()
-        self._next_chunk_id = 1
+        self._next_chunk_id = max(1, int(next_chunk_id_start))
         self._step_ms = step_ms or (3200 if mode == RecognitionMode.PRECISE else 1400)
         self._window_ms = window_ms or (3800 if mode == RecognitionMode.PRECISE else 2200)
         self._last_emit_end_ms = 0

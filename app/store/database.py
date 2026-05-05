@@ -45,18 +45,34 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
         self.conn.commit()
+        self._ensure_session_title_column()
+
+    def _ensure_session_title_column(self) -> None:
+        cols = {row["name"] for row in self.conn.execute("PRAGMA table_info(sessions)").fetchall()}
+        if "title" not in cols:
+            self.conn.execute("ALTER TABLE sessions ADD COLUMN title TEXT DEFAULT ''")
+            self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()
 
-    def create_session(self, mode: str, source_language: str) -> int:
+    def create_session(self, mode: str, source_language: str, title: str = "") -> int:
         now = datetime.now().isoformat()
         cur = self.conn.execute(
-            "INSERT INTO sessions(created_at, mode, source_language) VALUES(?, ?, ?)",
-            (now, mode, source_language),
+            "INSERT INTO sessions(created_at, mode, source_language, title) VALUES(?, ?, ?, ?)",
+            (now, mode, source_language, title.strip()),
         )
         self.conn.commit()
         return int(cur.lastrowid)
+
+    def update_session_title(self, session_id: int, title: str) -> None:
+        cur = self.conn.execute(
+            "UPDATE sessions SET title = ? WHERE session_id = ?",
+            (title.strip(), session_id),
+        )
+        self.conn.commit()
+        if cur.rowcount == 0:
+            raise ValueError(f"session not found: {session_id}")
 
     def end_session(self, session_id: int) -> None:
         self.conn.execute(
@@ -107,9 +123,18 @@ class Database:
         self.conn.execute("DELETE FROM sessions")
         self.conn.commit()
 
+    def max_chunk_id(self, session_id: int) -> int:
+        row = self.conn.execute(
+            "SELECT MAX(chunk_id) FROM segments WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        if row is None or row[0] is None:
+            return 0
+        return int(row[0])
+
     def list_sessions(self) -> list[SessionRecord]:
         rows = self.conn.execute(
-            "SELECT session_id, created_at, ended_at, mode, source_language FROM sessions ORDER BY session_id DESC"
+            "SELECT session_id, created_at, ended_at, mode, source_language, title FROM sessions ORDER BY session_id DESC"
         ).fetchall()
         return [
             SessionRecord(
@@ -118,6 +143,7 @@ class Database:
                 ended_at=datetime.fromisoformat(row["ended_at"]) if row["ended_at"] else None,
                 mode=row["mode"],
                 source_language=row["source_language"],
+                title=row["title"] or "",
             )
             for row in rows
         ]

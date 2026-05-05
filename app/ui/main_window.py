@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
     QFrame,
+    QInputDialog,
     QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
@@ -28,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.config import SettingsManager
+from app.config import DEFAULT_TRANSCRIBE_API_KEY, SettingsManager
 from app.core.controller import AppController
 from app.models import (
     AppSettings,
@@ -94,7 +95,7 @@ class MainWindow(QMainWindow):
         "vi": "越南语",
     }
     RECOGNITION_MODE_LABELS = {
-        RecognitionMode.PRECISE: "精准",
+        RecognitionMode.PRECISE: "标准",
         RecognitionMode.REALTIME: "实时",
     }
     TRANSLATION_STYLE_LABELS = {
@@ -211,11 +212,46 @@ class MainWindow(QMainWindow):
                 margin: 0px;
                 line-height: 108%;
             }
+            QSplitter::handle {
+                background: #07111c;
+            }
+            QSplitter::handle:horizontal {
+                width: 5px;
+            }
+            QScrollBar:vertical {
+                background: #020913;
+                width: 10px;
+                margin: 0;
+            }
+            QScrollBar::handle:vertical {
+                background: #31455b;
+                min-height: 24px;
+                border-radius: 3px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0;
+            }
+            QScrollBar:horizontal {
+                background: #020913;
+                height: 10px;
+                margin: 0;
+            }
+            QScrollBar::handle:horizontal {
+                background: #31455b;
+                min-width: 24px;
+                border-radius: 3px;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0;
+            }
             """
         )
 
         self.toggle_button = QPushButton("开始")
-        self.clear_button = QPushButton("清空")
+        self.new_workspace_button = QPushButton("新建")
+        self.new_workspace_button.setToolTip(
+            "结束「当前这一条」会话并在右侧打开空白区；左侧列表里其它记录与刚结束的这条都会保留，不会清空左侧。"
+        )
         self.export_button = QPushButton("导出")
         self.settings_button = QPushButton("设置")
         self.pin_button = QPushButton("置顶")
@@ -271,7 +307,7 @@ class MainWindow(QMainWindow):
         controls_row.setSpacing(4)
         for button in (
             self.toggle_button,
-            self.clear_button,
+            self.new_workspace_button,
             self.export_button,
             self.settings_button,
             self.pin_button,
@@ -379,8 +415,8 @@ class MainWindow(QMainWindow):
         self._apply_overlay_penetration_button_state()
 
     def _clear_all_left_sessions(self) -> None:
-        if self.controller.session_id is not None:
-            QMessageBox.warning(self, "无法清空", "请先停止翻译，再清空全部会话记录。")
+        if self.controller.pipeline_running:
+            QMessageBox.warning(self, "无法清空", "请先暂停翻译，再清空全部会话记录。")
             return
         count = len(self.db.list_sessions())
         if count == 0:
@@ -396,14 +432,14 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
         self.db.delete_all_sessions()
-        self.controller.session_changed.emit((self.db.list_sessions(), None))
+        self.controller.session_changed.emit((self.db.list_sessions(), None, True))
         self.history_list.clear()
         self._history_items_by_chunk.clear()
         self._update_live_caption("", "")
 
     def _connect_signals(self) -> None:
         self.toggle_button.clicked.connect(lambda: asyncio.create_task(self._toggle_translation()))
-        self.clear_button.clicked.connect(self._clear_current_view)
+        self.new_workspace_button.clicked.connect(lambda: asyncio.create_task(self._new_translation_workspace()))
         self.export_button.clicked.connect(self._export_current_session)
         self.settings_button.clicked.connect(self._open_settings)
         self.pin_button.clicked.connect(self._toggle_main_window_on_top)
@@ -418,7 +454,7 @@ class MainWindow(QMainWindow):
         self._session_delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self._session_delete_shortcut.activated.connect(self._delete_selected_session)
         self.controller.running_changed.connect(self._on_running_changed)
-        self.controller.segment_updated.connect(self._upsert_segment)
+        self.controller.segment_updated.connect(self._on_segment_updated)
         self.controller.session_changed.connect(self._refresh_sessions)
         self.controller.status_changed.connect(self.status_label.setText)
         self.controller.error_occurred.connect(self._show_error)
@@ -433,10 +469,27 @@ class MainWindow(QMainWindow):
         return shadow
 
     async def _toggle_translation(self) -> None:
-        if self.controller.session_id is None:
-            await self.controller.start()
+        if self.controller.pipeline_running:
+            await self.controller.pause()
         else:
+            await self.controller.start()
+
+    async def _new_translation_workspace(self) -> None:
+        if self.controller.session_id is not None:
             await self.controller.stop()
+        self.history_list.clear()
+        self._history_items_by_chunk.clear()
+        self._update_live_caption("", "")
+        self._refresh_sessions((self.db.list_sessions(), None, False))
+        self._set_toggle_button_state(self.controller.pipeline_running)
+
+    @staticmethod
+    def _session_item_label(session: SessionRecord) -> str:
+        meta = f"{session.created_at:%m-%d %H:%M} {session.mode}/{session.source_language}"
+        name = (session.title or "").strip()
+        if name:
+            return f"#{session.session_id} {name}  ·  {meta}"
+        return f"#{session.session_id} {meta}"
 
     def _on_running_changed(self, running: bool) -> None:
         self._set_toggle_button_state(running)
@@ -455,7 +508,7 @@ class MainWindow(QMainWindow):
 
     def _set_toggle_button_state(self, running: bool) -> None:
         if running:
-            self.toggle_button.setText("停止")
+            self.toggle_button.setText("暂停")
             self.toggle_button.setStyleSheet(
                 "QPushButton { background: #642b2b; border: 1px solid #8f4b4b; color: #fff1f1; border-radius: 5px; font-size: 9px; padding: 2px 5px; }"
                 "QPushButton:hover { background: #7a3737; }"
@@ -508,8 +561,8 @@ class MainWindow(QMainWindow):
         else:
             self.overlay_visibility_button.setText("字幕开")
             self.overlay_visibility_button.setStyleSheet(
-                "QPushButton { background: #243244; border: 1px solid #47617d; color: #edf4ff; border-radius: 5px; font-size: 9px; padding: 2px 5px; }"
-                "QPushButton:hover { background: #30445d; }"
+                "QPushButton { background: #5b4a18; border: 1px solid #d4a017; color: #fff8e6; border-radius: 5px; font-size: 9px; padding: 2px 5px; font-weight: 600; }"
+                "QPushButton:hover { background: #7d5a18; }"
             )
 
     def _apply_main_window_on_top(self) -> None:
@@ -585,7 +638,7 @@ class MainWindow(QMainWindow):
         return super().eventFilter(watched, event)
 
     def _load_sessions(self) -> None:
-        self._refresh_sessions((self.db.list_sessions(), None))
+        self._refresh_sessions((self.db.list_sessions(), None, True))
 
     def _session_list_context_menu(self, pos) -> None:
         item = self.session_list.itemAt(pos)
@@ -593,10 +646,38 @@ class MainWindow(QMainWindow):
             return
         self.session_list.setCurrentItem(item)
         menu = QMenu(self)
+        rename_action = menu.addAction("重命名")
         delete_action = menu.addAction("删除记录")
         chosen = menu.exec(self.session_list.mapToGlobal(pos))
-        if chosen is delete_action:
+        if chosen is rename_action:
+            self._rename_selected_session()
+        elif chosen is delete_action:
             self._delete_selected_session()
+
+    def _rename_selected_session(self) -> None:
+        item = self.session_list.currentItem()
+        if item is None:
+            return
+        session_id = item.data(Qt.ItemDataRole.UserRole)
+        rec = next((s for s in self.db.list_sessions() if s.session_id == session_id), None)
+        if rec is None:
+            QMessageBox.warning(self, "重命名", "未找到该会话。")
+            return
+        current_title = (rec.title or "").strip()
+        text, ok = QInputDialog.getText(
+            self,
+            "重命名",
+            "会话名称（留空则仅显示时间与模式）:",
+            text=current_title,
+        )
+        if not ok:
+            return
+        try:
+            self.db.update_session_title(session_id, text)
+        except ValueError:
+            QMessageBox.warning(self, "重命名", "未找到该会话。")
+            return
+        self._refresh_sessions((self.db.list_sessions(), session_id, True))
 
     def _delete_selected_session(self) -> None:
         item = self.session_list.currentItem()
@@ -605,7 +686,11 @@ class MainWindow(QMainWindow):
         row = self.session_list.row(item)
         session_id = item.data(Qt.ItemDataRole.UserRole)
         if self.controller.session_id is not None and self.controller.session_id == session_id:
-            QMessageBox.warning(self, "无法删除", "当前会话正在翻译中，请先停止后再删除记录。")
+            QMessageBox.warning(
+                self,
+                "无法删除",
+                "此为当前会话（含已暂停）。请先点击「新建」结束当前区后，再删除左侧记录。",
+            )
             return
         reply = QMessageBox.question(
             self,
@@ -620,17 +705,20 @@ class MainWindow(QMainWindow):
             self.db.delete_session(session_id)
         except ValueError:
             QMessageBox.warning(self, "删除失败", "未找到该会话，可能已被删除。")
-            self.controller.session_changed.emit((self.db.list_sessions(), None))
+            self.controller.session_changed.emit((self.db.list_sessions(), None, True))
             return
         sessions = self.db.list_sessions()
         pick_id = None
         if sessions:
             pick_row = min(row, len(sessions) - 1)
             pick_id = sessions[pick_row].session_id
-        self.controller.session_changed.emit((sessions, pick_id))
+        self.controller.session_changed.emit((sessions, pick_id, True))
 
     def _refresh_sessions(self, payload: object) -> None:
-        if isinstance(payload, tuple) and len(payload) == 2:
+        prefer_first_on_miss = True
+        if isinstance(payload, tuple) and len(payload) == 3:
+            sessions, select_session_id, prefer_first_on_miss = payload[0], payload[1], payload[2]
+        elif isinstance(payload, tuple) and len(payload) == 2:
             sessions, select_session_id = payload[0], payload[1]
         else:
             sessions = payload  # type: ignore[assignment]
@@ -638,8 +726,7 @@ class MainWindow(QMainWindow):
         self.session_list.blockSignals(True)
         self.session_list.clear()
         for session in sessions:
-            label = f"#{session.session_id} {session.created_at:%m-%d %H:%M} {session.mode}/{session.source_language}"
-            item = QListWidgetItem(label)
+            item = QListWidgetItem(self._session_item_label(session))
             item.setData(Qt.ItemDataRole.UserRole, session.session_id)
             self.session_list.addItem(item)
         row_to_select = -1
@@ -649,7 +736,7 @@ class MainWindow(QMainWindow):
                 if it is not None and it.data(Qt.ItemDataRole.UserRole) == select_session_id:
                     row_to_select = row
                     break
-        if row_to_select < 0 and self.session_list.count() > 0:
+        if row_to_select < 0 and self.session_list.count() > 0 and prefer_first_on_miss:
             row_to_select = 0
         if row_to_select >= 0:
             self.session_list.setCurrentRow(row_to_select)
@@ -660,10 +747,17 @@ class MainWindow(QMainWindow):
             self.history_list.clear()
             self._history_items_by_chunk.clear()
             self._update_live_caption("", "")
+            self._set_toggle_button_state(self.controller.pipeline_running)
+        elif not prefer_first_on_miss:
+            self.history_list.clear()
+            self._history_items_by_chunk.clear()
+            self._update_live_caption("", "")
+            self._set_toggle_button_state(self.controller.pipeline_running)
 
     def _load_selected_session(self) -> None:
         item = self.session_list.currentItem()
         if item is None:
+            self._set_toggle_button_state(self.controller.pipeline_running)
             return
         session_id = item.data(Qt.ItemDataRole.UserRole)
         self.history_list.clear()
@@ -673,6 +767,17 @@ class MainWindow(QMainWindow):
             self._upsert_segment(segment)
         if not segments:
             self.history_list.scrollToTop()
+        self._set_toggle_button_state(self.controller.pipeline_running)
+
+    def _on_segment_updated(self, segment: SubtitleSegment) -> None:
+        """仅当左侧选中行与片段属同一会话时才更新列表，避免浏览历史时与实时转写互相覆盖。"""
+        item = self.session_list.currentItem()
+        if item is not None:
+            if item.data(Qt.ItemDataRole.UserRole) != segment.session_id:
+                return
+        elif self.controller.session_id != segment.session_id:
+            return
+        self._upsert_segment(segment)
 
     def _upsert_segment(self, segment: SubtitleSegment) -> None:
         item_and_widget = self._history_items_by_chunk.get(segment.chunk_id)
@@ -702,12 +807,6 @@ class MainWindow(QMainWindow):
         list_item, _card = item_and_widget
         return self.history_list.row(list_item)
 
-    def _clear_current_view(self) -> None:
-        self.history_list.clear()
-        self._history_items_by_chunk.clear()
-        self._update_live_caption("", "")
-        self.diagnostic_box.clear()
-
     def _export_current_session(self) -> None:
         item = self.session_list.currentItem()
         if item is None:
@@ -728,7 +827,7 @@ class MainWindow(QMainWindow):
     def _open_settings(self) -> None:
         dialog = SettingsDialog(
             self.settings,
-            self.secrets.get(self.settings.transcribe_api_key_name),
+            self.secrets.get(self.settings.transcribe_api_key_name) or DEFAULT_TRANSCRIBE_API_KEY,
             self.secrets.get(self.settings.translate_api_key_name),
             self,
         )
@@ -739,10 +838,7 @@ class MainWindow(QMainWindow):
         transcribe_raw = dialog.transcribe_key_edit.text().strip()
         translate_raw = dialog.translate_key_edit.text().strip()
         self.secrets.set(self.settings.transcribe_api_key_name, transcribe_raw)
-        if dialog.share_translate_with_transcribe:
-            self.secrets.delete(self.settings.translate_api_key_name)
-        else:
-            self.secrets.set(self.settings.translate_api_key_name, translate_raw)
+        self.secrets.set(self.settings.translate_api_key_name, translate_raw)
         if self.settings.transcribe_api_key_name != "default" and self.settings.translate_api_key_name != "default":
             self.secrets.delete("default")
         if not transcribe_raw and not translate_raw:

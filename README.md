@@ -22,6 +22,12 @@ pip install -e .[local-asr]
 
 `faster-whisper` 为可选依赖。若只想先跑云端稳态模式，可以不安装。
 
+### Windows 安装包（运营 / 免 Python）
+
+- 研发构建：在仓库根目录执行 `.\scripts\build_windows.ps1`（需 Python 3.12+；可选安装 [Inno Setup 6](https://jrsoftware.org/isdl.php) 以生成 `dist\RealTimeTranslation-Setup.exe`）。
+- PyInstaller 配置见 [packaging/realtime_translation.spec](packaging/realtime_translation.spec)。
+- 给运营看的步骤见 [OPERATORS.md](OPERATORS.md)；发布前自检见 [packaging/RELEASE_SMOKE.md](packaging/RELEASE_SMOKE.md)。
+
 ## 运行
 
 ```powershell

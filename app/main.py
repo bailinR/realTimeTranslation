@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QApplication
 from qasync import QEventLoop
 
 from app.config import SettingsManager, get_app_paths
+from app.ui.app_theme import apply_dark_application_theme
 from app.core.controller import AppController
 from app.core.events import EventBus
 from app.logging_config import setup_logging
@@ -18,6 +19,7 @@ from app.ui.tray import AppTray
 
 def main() -> int:
     app = QApplication(sys.argv)
+    apply_dark_application_theme(app)
     paths = get_app_paths()
     setup_logging(paths.logs_dir)
     settings_manager = SettingsManager(paths.settings_path)
