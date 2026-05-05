@@ -51,3 +51,26 @@ def test_delete_session(tmp_path):
     assert [r.session_id for r in db.list_sessions()] == [s2]
     assert db.list_segments(s2) == []
     assert db.list_segments(s1) == []
+
+
+def test_delete_all_sessions(tmp_path):
+    db = Database(tmp_path / "all.db")
+    s1 = db.create_session("precise", "en")
+    s2 = db.create_session("realtime", "th")
+    seg = SubtitleSegment(
+        seq=0,
+        session_id=s1,
+        chunk_id=1,
+        started_at=datetime(2025, 1, 1, 12, 0, 0),
+        ended_at=datetime(2025, 1, 1, 12, 0, 1),
+        source_lang="en",
+        source_text="x",
+        translated_text="y",
+        status=SubtitleStatus.FINAL,
+        provider="cloud",
+    )
+    db.upsert_segment(seg)
+    db.delete_all_sessions()
+    assert db.list_sessions() == []
+    assert db.list_segments(s1) == []
+    assert db.list_segments(s2) == []

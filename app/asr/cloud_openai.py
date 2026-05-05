@@ -37,9 +37,16 @@ class OpenAIChunkTranscriptionProvider:
         self.queue: asyncio.Queue[AudioChunk | None] = asyncio.Queue()
         self.worker: asyncio.Task | None = None
 
+    def _http_timeout(self) -> httpx.Timeout:
+        # DashScope ASR over chat/completions can block on read long after upload; a single
+        # float applies to every phase and was too short for slow responses → ReadTimeout.
+        t = float(self.timeout_seconds)
+        read_s = min(240.0, max(90.0, t * 3.0))
+        return httpx.Timeout(connect=20.0, read=read_s, write=max(30.0, t), pool=15.0)
+
     async def start(self) -> None:
         self.client = httpx.AsyncClient(
-            timeout=self.timeout_seconds,
+            timeout=self._http_timeout(),
             headers={"Authorization": f"Bearer {self.api_key}"},
             trust_env=False,
         )
@@ -63,18 +70,7 @@ class OpenAIChunkTranscriptionProvider:
             try:
                 if not self.client:
                     raise RuntimeError("HTTP client is not started")
-                if self._use_dashscope_asr_compat():
-                    response = await self.client.post(
-                        f"{self.base_url}/chat/completions",
-                        json=self._build_dashscope_payload(chunk),
-                    )
-                else:
-                    wav_bytes = _pcm_to_wav_bytes(chunk.pcm_bytes, chunk.sample_rate)
-                    files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
-                    data = {"model": self.model, "response_format": "verbose_json"}
-                    if self.language != "auto":
-                        data["language"] = self.language
-                    response = await self.client.post(f"{self.base_url}/audio/transcriptions", data=data, files=files)
+                response = await self._post_transcription_with_retry(chunk)
                 response.raise_for_status()
                 payload = response.json()
                 text, language = self._extract_transcript(payload)
@@ -110,6 +106,36 @@ class OpenAIChunkTranscriptionProvider:
                         recoverable=True,
                     )
                 )
+
+    async def _post_transcription_with_retry(self, chunk: AudioChunk) -> httpx.Response:
+        last_exc: Exception | None = None
+        for attempt in range(2):
+            try:
+                return await self._post_transcription(chunk)
+            except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.RemoteProtocolError) as exc:
+                last_exc = exc
+                if attempt == 0:
+                    self.logger.warning("Cloud transcription request failed (%s), retrying once", type(exc).__name__)
+                    await asyncio.sleep(1.5)
+                    continue
+                raise
+        assert last_exc is not None
+        raise last_exc
+
+    async def _post_transcription(self, chunk: AudioChunk) -> httpx.Response:
+        if not self.client:
+            raise RuntimeError("HTTP client is not started")
+        if self._use_dashscope_asr_compat():
+            return await self.client.post(
+                f"{self.base_url}/chat/completions",
+                json=self._build_dashscope_payload(chunk),
+            )
+        wav_bytes = _pcm_to_wav_bytes(chunk.pcm_bytes, chunk.sample_rate)
+        files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
+        data = {"model": self.model, "response_format": "verbose_json"}
+        if self.language != "auto":
+            data["language"] = self.language
+        return await self.client.post(f"{self.base_url}/audio/transcriptions", data=data, files=files)
 
     def _use_dashscope_asr_compat(self) -> bool:
         host = self.base_url.lower()

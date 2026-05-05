@@ -5,27 +5,44 @@ from ctypes import byref, cast
 from ctypes.wintypes import MSG, POINT
 
 from PySide6.QtCore import QEvent, QPoint, Qt
-from PySide6.QtGui import QColor, QFont
-from PySide6.QtWidgets import QFrame, QGraphicsDropShadowEffect, QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import QFrame, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from app.models import OverlayMode
 
 
 GWL_EXSTYLE = -20
+GWL_STYLE = -16
 WS_EX_LAYERED = 0x00080000
 WS_EX_TRANSPARENT = 0x00000020
+WS_BORDER = 0x00800000
+WS_DLGFRAME = 0x00400000
+WS_THICKFRAME = 0x00040000
+
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_NOZORDER = 0x0004
+SWP_NOACTIVATE = 0x0010
+SWP_FRAMECHANGED = 0x0020
+SWP_NOOWNERZORDER = 0x0200
 
 WM_NCHITTEST = 0x0084
 HTCLIENT = 1
 HTTRANSPARENT = -1
 
 
-def _label_shadow() -> QGraphicsDropShadowEffect:
-    shadow = QGraphicsDropShadowEffect()
-    shadow.setBlurRadius(6)
-    shadow.setOffset(0, 1)
-    shadow.setColor(QColor(0, 0, 0, 220))
-    return shadow
+# Yellow fill + black stroke (8-way 1px only — avoids a heavy “boxed” halo).
+_SUBTITLE_OUTLINE_STYLE = (
+    "color: #ffe135; "
+    "background: transparent; "
+    "border: none; "
+    "outline: none; "
+    "padding: 0px; "
+    "margin: 0px; "
+    "text-shadow: "
+    "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, "
+    "0 -1px 0 #000, 0 1px 0 #000, -1px 0 0 #000, 1px 0 0 #000;"
+)
 
 
 class OverlayWindow(QWidget):
@@ -41,17 +58,23 @@ class OverlayWindow(QWidget):
             | Qt.WindowType.NoDropShadowWindowHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.resize(1220, 118)
+        self.resize(1220, 130)
         self._mode = OverlayMode.WINDOWED
         self.setStyleSheet(
             """
             QWidget#overlayRoot {
-                background-color: rgba(12, 14, 18, 200);
+                background: transparent;
                 border: none;
                 outline: none;
             }
             QFrame#subtitlePanel {
-                background-color: transparent;
+                background-color: rgba(0, 0, 0, 150);
+                border: none;
+                outline: none;
+                border-radius: 10px;
+            }
+            QWidget#subtitlePair {
+                background: transparent;
                 border: none;
             }
             QLabel {
@@ -65,32 +88,52 @@ class OverlayWindow(QWidget):
 
         self.source_label = QLabel("Waiting for subtitles...")
         self.translation_label = QLabel("等待字幕...")
-        self.source_label.setFont(QFont("Segoe UI", 14, QFont.Weight.Medium))
+        self.source_label.setFont(QFont("Segoe UI", 14, QFont.Weight.DemiBold))
         self.translation_label.setFont(QFont("Microsoft YaHei UI", 18, QFont.Weight.Bold))
-        self.source_label.setStyleSheet("color: #f1f5f9;")
-        self.translation_label.setStyleSheet("color: #ffffff;")
+        # Tight line-height shrinks each QLabel’s layout height; avoid negative margins (clips glyphs).
+        self.source_label.setStyleSheet(
+            _SUBTITLE_OUTLINE_STYLE + " font-size: 14px; color: #ffea70; line-height: 1.0;"
+        )
+        self.translation_label.setStyleSheet(
+            _SUBTITLE_OUTLINE_STYLE + " font-size: 18px; line-height: 1.0;"
+        )
         self.source_label.setWordWrap(True)
         self.translation_label.setWordWrap(True)
-        self.source_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        self.translation_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        self.source_label.setGraphicsEffect(_label_shadow())
-        self.translation_label.setGraphicsEffect(_label_shadow())
+        center = Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
+        self.source_label.setAlignment(center)
+        self.translation_label.setAlignment(center)
 
         self._content_frame = QFrame()
         self._content_frame.setObjectName("subtitlePanel")
+        self._content_frame.setFrameShape(QFrame.Shape.NoFrame)
+        self._content_frame.setLineWidth(0)
         self._content_frame.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._content_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.source_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.translation_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.source_label.setContentsMargins(0, 0, 0, 0)
+        self.translation_label.setContentsMargins(0, 0, 0, 0)
+        self.source_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self.translation_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+
+        self._subtitle_pair = QWidget()
+        self._subtitle_pair.setObjectName("subtitlePair")
+        self._subtitle_pair.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        pair_layout = QVBoxLayout(self._subtitle_pair)
+        pair_layout.setContentsMargins(0, 0, 0, 0)
+        pair_layout.setSpacing(0)
+        pair_layout.addWidget(self.source_label)
+        pair_layout.addWidget(self.translation_label)
 
         inner = QVBoxLayout(self._content_frame)
-        inner.setContentsMargins(6, 4, 6, 4)
-        inner.setSpacing(4)
-        inner.addWidget(self.source_label)
-        inner.addWidget(self.translation_label)
+        inner.setContentsMargins(10, 4, 10, 4)
+        inner.setSpacing(0)
+        inner.addStretch(1)
+        inner.addWidget(self._subtitle_pair, 0)
+        inner.addStretch(1)
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(20, 10, 20, 10)
+        outer.setContentsMargins(4, 4, 4, 4)
         outer.setSpacing(0)
         outer.addWidget(self._content_frame, 1)
 
@@ -116,6 +159,32 @@ class OverlayWindow(QWidget):
         style |= WS_EX_LAYERED
         style &= ~WS_EX_TRANSPARENT
         ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
+        self._strip_windows_thin_border(hwnd)
+
+    def _strip_windows_thin_border(self, hwnd: int) -> None:
+        """Remove the 1px light system frame often seen on layered frameless Tool windows."""
+        try:
+            gwl = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
+            gwl &= ~(WS_BORDER | WS_DLGFRAME | WS_THICKFRAME)
+            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, gwl)
+            flags = (
+                SWP_FRAMECHANGED
+                | SWP_NOMOVE
+                | SWP_NOSIZE
+                | SWP_NOZORDER
+                | SWP_NOOWNERZORDER
+                | SWP_NOACTIVATE
+            )
+            ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, flags)
+        except OSError:
+            return
+        try:
+            dwm = ctypes.windll.dwmapi
+            DWMWA_BORDERLESS = 34
+            val = ctypes.c_int(1)
+            dwm.DwmSetWindowAttribute(hwnd, DWMWA_BORDERLESS, ctypes.byref(val), ctypes.sizeof(val))
+        except OSError:
+            pass
 
     def nativeEvent(self, eventType, message):  # noqa: N802
         if b"windows_generic_MSG" not in bytes(eventType):

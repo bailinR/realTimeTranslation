@@ -92,6 +92,10 @@ class AppController(QObject):
                 model=self.settings.recognition.translate_model,
                 timeout_seconds=self.settings.recognition.timeout_seconds,
                 style=self.settings.recognition.translation_style,
+                recognition_mode=self.settings.recognition.mode,
+                translation_domain=self.settings.recognition.translation_domain,
+                glossary_text=self.settings.recognition.translation_glossary,
+                names_text=self.settings.recognition.translation_names,
             )
             self.cloud_provider = OpenAIChunkTranscriptionProvider(
                 base_url=self.settings.recognition.base_url,
@@ -260,7 +264,8 @@ class AppController(QObject):
     async def _translate(self, text: str, source_lang: str) -> str:
         if not self.translator:
             return text
-        context = self.final_source_history[-2:] + self.final_translation_history[-2:]
+        pairs = list(zip(self.final_source_history[-6:], self.final_translation_history[-6:], strict=False))
+        context = [f"源：{s} | 译：{t}" for s, t in pairs if (s or t).strip()]
         try:
             return await self.translator.translate(text, source_lang, context)
         except Exception as exc:

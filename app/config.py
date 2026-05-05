@@ -13,6 +13,7 @@ from app.models import (
     OverlayMode,
     RecognitionConfig,
     RecognitionMode,
+    TranslationDomain,
     TranslationStyle,
 )
 
@@ -65,6 +66,19 @@ class SettingsManager:
             )
         except ValueError:
             recognition_raw["translation_style"] = TranslationStyle.LIVE_COMMERCE
+        domain_raw = recognition_raw.get("translation_domain", TranslationDomain.BEAUTY)
+        try:
+            recognition_raw["translation_domain"] = (
+                domain_raw if isinstance(domain_raw, TranslationDomain) else TranslationDomain(str(domain_raw))
+            )
+        except ValueError:
+            recognition_raw["translation_domain"] = TranslationDomain.BEAUTY
+        recognition_raw.setdefault("translation_glossary", "")
+        recognition_raw.setdefault("translation_names", "")
+        if not isinstance(recognition_raw.get("translation_glossary"), str):
+            recognition_raw["translation_glossary"] = ""
+        if not isinstance(recognition_raw.get("translation_names"), str):
+            recognition_raw["translation_names"] = ""
         recognition = RecognitionConfig(**recognition_raw)
         overlay_value = raw.get("overlay_mode", OverlayMode.WINDOWED)
         try:
@@ -86,4 +100,5 @@ class SettingsManager:
         payload["overlay_mode"] = settings.overlay_mode.value
         payload["recognition"]["mode"] = settings.recognition.mode.value
         payload["recognition"]["translation_style"] = settings.recognition.translation_style.value
+        payload["recognition"]["translation_domain"] = settings.recognition.translation_domain.value
         self.path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

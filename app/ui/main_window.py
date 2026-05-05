@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt
+from PySide6.QtCore import QEvent, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QMenu,
+    QLayout,
     QPlainTextEdit,
     QPushButton,
     QSizeGrip,
@@ -29,7 +30,15 @@ from PySide6.QtWidgets import (
 
 from app.config import SettingsManager
 from app.core.controller import AppController
-from app.models import AppSettings, OverlayMode, RecognitionMode, SessionRecord, SubtitleSegment, TranslationStyle
+from app.models import (
+    AppSettings,
+    OverlayMode,
+    RecognitionMode,
+    SessionRecord,
+    SubtitleSegment,
+    TranslationDomain,
+    TranslationStyle,
+)
 from app.store.database import Database
 from app.store.settings_secrets import SecretStore
 from app.ui.overlay import OverlayWindow
@@ -37,12 +46,15 @@ from app.ui.settings_dialog import SettingsDialog
 
 
 class SegmentHistoryWidget(QFrame):
+    """Tight source/translation stack; row height from heightForWidth so multi-line source does not leave a large gap."""
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("historyCard")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 2, 4, 2)
-        layout.setSpacing(1)
+        layout.setContentsMargins(2, 0, 2, 0)
+        layout.setSpacing(0)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
         self.source_label = QLabel("")
         self.translation_label = QLabel("")
@@ -50,14 +62,28 @@ class SegmentHistoryWidget(QFrame):
         self.translation_label.setObjectName("translationLine")
         self.source_label.setWordWrap(True)
         self.translation_label.setWordWrap(True)
+        self.source_label.setContentsMargins(0, 0, 0, 0)
+        self.translation_label.setContentsMargins(0, 0, 0, 0)
+        self.source_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.translation_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.source_label.setMinimumHeight(0)
+        self.translation_label.setMinimumHeight(0)
         self.translation_label.setFont(QFont("Microsoft YaHei UI", 12, QFont.Weight.DemiBold))
 
         layout.addWidget(self.source_label)
         layout.addWidget(self.translation_label)
 
+    def row_height_for_width(self, width: int) -> int:
+        m = self.layout().contentsMargins()
+        inner = max(width - m.left() - m.right(), 1)
+        gap = self.layout().spacing()
+        h_src = self.source_label.heightForWidth(inner)
+        h_tr = self.translation_label.heightForWidth(inner)
+        return max(m.top() + h_src + gap + h_tr + m.bottom(), 1)
+
     def update_segment(self, segment: SubtitleSegment) -> None:
         self.source_label.setText(f"[{segment.source_lang}] {segment.source_text}")
-        self.translation_label.setText(f"> {segment.translated_text}")
+        self.translation_label.setText(segment.translated_text)
 
 
 class MainWindow(QMainWindow):
@@ -75,6 +101,14 @@ class MainWindow(QMainWindow):
         TranslationStyle.LIVE_COMMERCE: "带货",
         TranslationStyle.COLLOQUIAL: "口语",
         TranslationStyle.FORMAL: "正式",
+    }
+    TRANSLATION_DOMAIN_LABELS = {
+        TranslationDomain.NONE: "不限",
+        TranslationDomain.BEAUTY: "美妆",
+        TranslationDomain.FASHION: "服饰",
+        TranslationDomain.ELECTRONICS: "数码",
+        TranslationDomain.FOOD: "食品",
+        TranslationDomain.GENERAL: "通用",
     }
 
     def __init__(
@@ -97,7 +131,7 @@ class MainWindow(QMainWindow):
         self.overlay = OverlayWindow()
         self.overlay.set_overlay_mode(self.settings.overlay_mode)
         self._history_items_by_chunk: dict[int, tuple[QListWidgetItem, SegmentHistoryWidget]] = {}
-        self._main_window_on_top = False
+        self._main_window_on_top = True
         self._overlay_visible = False
         self._drag_offset = None
         self._session_panel_width = 96
@@ -115,6 +149,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._connect_signals()
+        self._apply_main_window_on_top()
         self._load_sessions()
 
     def _build_ui(self) -> None:
@@ -152,6 +187,9 @@ class MainWindow(QMainWindow):
                 border: none;
                 border-radius: 0;
             }
+            QListWidget::item {
+                padding: 0px;
+            }
             QFrame#historyCard {
                 background: transparent;
                 border: none;
@@ -161,11 +199,17 @@ class MainWindow(QMainWindow):
                 color: #b9c9da;
                 font-size: 9px;
                 font-weight: 500;
+                padding: 0px;
+                margin: 0px;
+                line-height: 108%;
             }
             QLabel#translationLine {
                 color: #f3f7fb;
                 font-size: 12px;
                 font-weight: 600;
+                padding: 0px;
+                margin: 0px;
+                line-height: 108%;
             }
             """
         )
@@ -178,6 +222,7 @@ class MainWindow(QMainWindow):
         self.overlay_visibility_button = QPushButton("字幕")
         self.overlay_button = QPushButton("字幕穿透")
         self.recover_button = QPushButton("恢复")
+        self.clear_sessions_button = QPushButton("清空左侧会话")
         root = QWidget()
         root.setObjectName("outerRoot")
         self.setCentralWidget(root)
@@ -233,6 +278,7 @@ class MainWindow(QMainWindow):
             self.overlay_visibility_button,
             self.overlay_button,
             self.recover_button,
+            self.clear_sessions_button,
         ):
             button.setFixedHeight(20)
             controls_row.addWidget(button)
@@ -276,7 +322,8 @@ class MainWindow(QMainWindow):
         self._main_splitter.addWidget(self.session_list)
 
         self.history_list = QListWidget()
-        self.history_list.setSpacing(0)
+        self.history_list.setSpacing(5)
+        self.history_list.setItemAlignment(Qt.AlignmentFlag.AlignTop)
         self.history_list.setAlternatingRowColors(False)
         self.history_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
@@ -331,6 +378,29 @@ class MainWindow(QMainWindow):
         self._apply_overlay_visibility_button_state()
         self._apply_overlay_penetration_button_state()
 
+    def _clear_all_left_sessions(self) -> None:
+        if self.controller.session_id is not None:
+            QMessageBox.warning(self, "无法清空", "请先停止翻译，再清空全部会话记录。")
+            return
+        count = len(self.db.list_sessions())
+        if count == 0:
+            QMessageBox.information(self, "清空会话", "左侧没有可删除的会话记录。")
+            return
+        reply = QMessageBox.question(
+            self,
+            "清空全部会话",
+            f"确定删除全部 {count} 条会话及其字幕？此操作不可恢复。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self.db.delete_all_sessions()
+        self.controller.session_changed.emit(self.db.list_sessions())
+        self.history_list.clear()
+        self._history_items_by_chunk.clear()
+        self._update_live_caption("", "")
+
     def _connect_signals(self) -> None:
         self.toggle_button.clicked.connect(lambda: asyncio.create_task(self._toggle_translation()))
         self.clear_button.clicked.connect(self._clear_current_view)
@@ -340,6 +410,7 @@ class MainWindow(QMainWindow):
         self.overlay_visibility_button.clicked.connect(self._toggle_overlay_visibility)
         self.overlay_button.clicked.connect(self._toggle_overlay_mode)
         self.recover_button.clicked.connect(lambda: asyncio.create_task(self.controller.recover_cloud()))
+        self.clear_sessions_button.clicked.connect(self._clear_all_left_sessions)
         self.minimize_button.clicked.connect(self.showMinimized)
         self.close_button.clicked.connect(self.close)
         self.session_list.itemSelectionChanged.connect(self._load_selected_session)
@@ -462,6 +533,15 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._sync_main_splitter_for_resize()
+        self._reflow_history_row_heights()
+
+    def _reflow_history_row_heights(self) -> None:
+        if not self._history_items_by_chunk:
+            return
+        vpw = max(self.history_list.viewport().width() - 2, 40)
+        for _cid, (list_item, card) in self._history_items_by_chunk.items():
+            list_item.setSizeHint(QSize(vpw, card.row_height_for_width(vpw)))
+        self.history_list.scheduleDelayedItemsLayout()
 
     def _on_main_splitter_moved(self, _pos: int, _index: int) -> None:
         self._session_panel_width = max(
@@ -579,14 +659,16 @@ class MainWindow(QMainWindow):
             list_item = QListWidgetItem()
             card = SegmentHistoryWidget()
             list_item.setData(Qt.ItemDataRole.UserRole, segment.chunk_id)
-            list_item.setSizeHint(card.sizeHint())
             self.history_list.addItem(list_item)
             self.history_list.setItemWidget(list_item, card)
             self._history_items_by_chunk[segment.chunk_id] = (list_item, card)
         else:
             list_item, card = item_and_widget
         card.update_segment(segment)
-        list_item.setSizeHint(card.sizeHint())
+        vpw = max(self.history_list.viewport().width() - 2, 40)
+        row_h = card.row_height_for_width(vpw)
+        list_item.setSizeHint(QSize(vpw, row_h))
+        self.history_list.scheduleDelayedItemsLayout()
         self.history_list.scrollToBottom()
         self.stats_label.setText(
             f"帧:{self.controller.audio_packets_received}|块:{self.controller.chunks_dispatched}"
@@ -676,4 +758,7 @@ class MainWindow(QMainWindow):
         s = self.TRANSLATION_STYLE_LABELS.get(
             self.settings.recognition.translation_style, self.settings.recognition.translation_style.value
         )
-        self.mode_hint.setText(f"识别:{m} | 风格:{s}")
+        d = self.TRANSLATION_DOMAIN_LABELS.get(
+            self.settings.recognition.translation_domain, self.settings.recognition.translation_domain.value
+        )
+        self.mode_hint.setText(f"识别:{m} | 风格:{s} | 领域:{d}")

@@ -21,6 +21,17 @@ class TranslationStyle(StrEnum):
     FORMAL = "formal"
 
 
+class TranslationDomain(StrEnum):
+    """翻译领域（影响系统提示中的场景约束）；none=不额外限定。"""
+
+    NONE = "none"
+    BEAUTY = "beauty"
+    FASHION = "fashion"
+    ELECTRONICS = "electronics"
+    FOOD = "food"
+    GENERAL = "general"
+
+
 class SubtitleStatus(StrEnum):
     DRAFT = "draft"
     FINAL = "final"
@@ -43,6 +54,9 @@ class AudioSourceConfig:
 class RecognitionConfig:
     mode: RecognitionMode = RecognitionMode.PRECISE
     translation_style: TranslationStyle = TranslationStyle.LIVE_COMMERCE
+    translation_domain: TranslationDomain = TranslationDomain.BEAUTY
+    translation_glossary: str = ""
+    translation_names: str = ""
     source_language: str = "auto"
     transcribe_model: str = "qwen3-asr-flash"
     translate_model: str = "qwen-plus"

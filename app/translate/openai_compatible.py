@@ -2,8 +2,42 @@ from __future__ import annotations
 
 import httpx
 
-from app.models import TranslationStyle
+from app.models import RecognitionMode, TranslationDomain, TranslationStyle
 from app.net_utils import summarize_httpx_exception
+
+
+def parse_translation_table_lines(text: str, *, max_lines: int = 48) -> list[str]:
+    """Non-empty lines; # starts a comment line."""
+    out: list[str] = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        out.append(s)
+        if len(out) >= max_lines:
+            break
+    return out
+
+
+_DOMAIN_HINTS: dict[TranslationDomain, str] = {
+    TranslationDomain.NONE: "",
+    TranslationDomain.BEAUTY: (
+        "【领域：美妆护肤】优先使用美妆直播常见说法；成分、肤质、妆效、色号、质地、功效宣称等用词准确，"
+        "避免把化妆术语译成泛化日常词。"
+    ),
+    TranslationDomain.FASHION: (
+        "【领域：服饰鞋包】版型、面料、尺码、洗护与穿搭场景用语准确，品牌与系列名与表内译法一致。"
+    ),
+    TranslationDomain.ELECTRONICS: (
+        "【领域：数码家电】型号、参数、接口、功能点译名准确，勿随意改写 SKU 与规格数字。"
+    ),
+    TranslationDomain.FOOD: (
+        "【领域：食品生鲜】规格、产地、口感、保质期与配料相关说法准确，计量单位清晰。"
+    ),
+    TranslationDomain.GENERAL: (
+        "【领域：通用带货】平衡准确与通顺，促销数字与库存话术忠实于原句。"
+    ),
+}
 
 
 LANGUAGE_NAMES = {
@@ -23,14 +57,24 @@ class OpenAICompatibleTranslator:
         model: str,
         timeout_seconds: float,
         style: TranslationStyle = TranslationStyle.LIVE_COMMERCE,
+        recognition_mode: RecognitionMode | None = None,
+        translation_domain: TranslationDomain = TranslationDomain.BEAUTY,
+        glossary_text: str = "",
+        names_text: str = "",
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.timeout_seconds = timeout_seconds
         self.style = style
+        self.recognition_mode = recognition_mode
+        self.translation_domain = translation_domain
+        self._glossary_lines = parse_translation_table_lines(glossary_text)
+        self._names_lines = parse_translation_table_lines(names_text)
+        t = float(timeout_seconds)
+        read_s = min(120.0, max(45.0, t * 2.0))
         self.client = httpx.AsyncClient(
-            timeout=self.timeout_seconds,
+            timeout=httpx.Timeout(connect=15.0, read=read_s, write=max(30.0, t), pool=10.0),
             headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
             trust_env=False,
         )
@@ -38,7 +82,7 @@ class OpenAICompatibleTranslator:
     async def translate(self, text: str, source_lang: str, context: list[str]) -> str:
         if not text.strip():
             return ""
-        context_lines = "\n".join(f"- {line}" for line in context[-2:] if line.strip())
+        context_lines = "\n".join(f"- {line}" for line in context[-12:] if line.strip())
         payload = {
             "model": self.model,
             "temperature": 0.0,
@@ -97,7 +141,33 @@ class OpenAICompatibleTranslator:
             "品牌名、人名、地名、商品名优先保留原文或做简短音译。"
             "输出只能是译文本身。"
         )
-        return f"{base}\n{self._style_block()}"
+        precise = ""
+        if self.recognition_mode == RecognitionMode.PRECISE:
+            precise = (
+                "【准确优先】当前为精准切分模式：请与源句一一对应，勿合并相邻语义。"
+                "术语、数字、否定与语气尽量与源句对齐；不确定处保留原词或音译，勿凭空虚构。"
+                "少用过度压缩的短词导致信息缺失。"
+            )
+        parts: list[str] = [base]
+        domain = _DOMAIN_HINTS.get(self.translation_domain, "")
+        if domain:
+            parts.append(domain)
+        parts.append(self._style_block())
+        if precise:
+            parts.append(precise)
+        glossary = self._table_block("【术语与固定译法】以下条目在译文中请严格遵守（支持 原文=译文、外文=中文）。", self._glossary_lines)
+        if glossary:
+            parts.append(glossary)
+        names = self._table_block("【人名/主播/昵称】以下写法在译文中请统一（支持 展示名=中文名、外文名=中文名）。", self._names_lines)
+        if names:
+            parts.append(names)
+        return "\n".join(parts)
+
+    def _table_block(self, title: str, lines: list[str]) -> str:
+        if not lines:
+            return ""
+        body = "\n".join(f"- {line}" for line in lines)
+        return f"{title}\n{body}"
 
     def _build_user_prompt(self, *, text: str, source_lang: str, context_lines: str) -> str:
         language_name = LANGUAGE_NAMES.get(source_lang, source_lang or "自动检测")
