@@ -77,6 +77,12 @@ class AppSettings:
     audio: AudioSourceConfig = field(default_factory=AudioSourceConfig)
     recognition: RecognitionConfig = field(default_factory=RecognitionConfig)
     overlay_mode: OverlayMode = OverlayMode.WINDOWED
+    overlay_source_font_size: int = 14
+    overlay_translation_font_size: int = 18
+    ui_scale_percent: int = 100
+    main_history_source_font_px: int = 9
+    main_history_translation_font_px: int = 12
+    main_log_font_px: int = 8
     export_dir: str = ""
     local_compute_type: str = "int8"
     transcribe_api_key_name: str = "transcribe"

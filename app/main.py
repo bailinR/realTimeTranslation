@@ -24,6 +24,7 @@ def main() -> int:
     setup_logging(paths.logs_dir)
     settings_manager = SettingsManager(paths.settings_path)
     settings = settings_manager.load()
+    apply_dark_application_theme(app, ui_scale_percent=settings.ui_scale_percent)
     db = Database(paths.db_path)
     secrets = SecretStore()
     controller = AppController(settings, paths, db, secrets, EventBus())

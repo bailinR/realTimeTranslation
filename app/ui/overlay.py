@@ -88,15 +88,7 @@ class OverlayWindow(QWidget):
 
         self.source_label = QLabel("Waiting for subtitles...")
         self.translation_label = QLabel("等待字幕...")
-        self.source_label.setFont(QFont("Segoe UI", 14, QFont.Weight.DemiBold))
-        self.translation_label.setFont(QFont("Microsoft YaHei UI", 18, QFont.Weight.Bold))
-        # Tight line-height shrinks each QLabel’s layout height; avoid negative margins (clips glyphs).
-        self.source_label.setStyleSheet(
-            _SUBTITLE_OUTLINE_STYLE + " font-size: 14px; color: #ffea70; line-height: 1.0;"
-        )
-        self.translation_label.setStyleSheet(
-            _SUBTITLE_OUTLINE_STYLE + " font-size: 18px; line-height: 1.0;"
-        )
+        self.set_font_sizes(14, 18)
         self.source_label.setWordWrap(True)
         self.translation_label.setWordWrap(True)
         center = Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
@@ -146,6 +138,22 @@ class OverlayWindow(QWidget):
     def update_text(self, source_line: str, translated_line: str) -> None:
         self.source_label.setText(source_line or "Waiting for subtitles...")
         self.translation_label.setText(translated_line or "等待字幕...")
+
+    def set_font_sizes(self, source_px: int, translation_px: int) -> None:
+        src = max(8, min(72, int(source_px)))
+        tr = max(8, min(72, int(translation_px)))
+        f_src = QFont("Segoe UI")
+        f_src.setPixelSize(src)
+        f_src.setWeight(QFont.Weight.DemiBold)
+        self.source_label.setFont(f_src)
+        f_tr = QFont("Microsoft YaHei UI")
+        f_tr.setPixelSize(tr)
+        f_tr.setWeight(QFont.Weight.Bold)
+        self.translation_label.setFont(f_tr)
+        self.source_label.setStyleSheet(
+            _SUBTITLE_OUTLINE_STYLE + f" font-size: {src}px; color: #ffea70; line-height: 1.0;"
+        )
+        self.translation_label.setStyleSheet(_SUBTITLE_OUTLINE_STYLE + f" font-size: {tr}px; line-height: 1.0;")
 
     def set_overlay_mode(self, mode: OverlayMode) -> None:
         self._mode = mode

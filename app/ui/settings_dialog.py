@@ -1,23 +1,122 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
-from app.models import AppSettings, OverlayMode, RecognitionMode, TranslationDomain, TranslationStyle
+from app.models import AppSettings, RecognitionMode, TranslationDomain, TranslationStyle
+
+
+class NoWheelSpinBox(QSpinBox):
+    """只允许键盘输入数值，不因滚轮改变。"""
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        event.ignore()
+
+
+@dataclass
+class AppearanceFontState:
+    main_history_source_font_px: int
+    main_history_translation_font_px: int
+    main_log_font_px: int
+    overlay_source_font_size: int
+    overlay_translation_font_size: int
+
+    @staticmethod
+    def from_settings(s: AppSettings) -> AppearanceFontState:
+        return AppearanceFontState(
+            main_history_source_font_px=int(s.main_history_source_font_px),
+            main_history_translation_font_px=int(s.main_history_translation_font_px),
+            main_log_font_px=int(s.main_log_font_px),
+            overlay_source_font_size=int(s.overlay_source_font_size),
+            overlay_translation_font_size=int(s.overlay_translation_font_size),
+        )
+
+
+class AppearanceFontDialog(QDialog):
+    """主窗口字幕/日志与悬浮层字号；确定后由主设置对话框在点「OK」时一并保存。"""
+
+    def __init__(self, state: AppearanceFontState, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("其他字体设置")
+        self.resize(440, 360)
+
+        layout = QVBoxLayout(self)
+        tip = QLabel(
+            "以下为像素基数：主窗口右侧字幕与日志还会再乘以主界面里的「整体缩放」。\n悬浮层字幕为独立字号。所有更改在主设置窗口点击「OK」后写入配置文件。"
+        )
+        tip.setWordWrap(True)
+        tip.setStyleSheet("color: #8bb0c9; font-size: 11px;")
+        layout.addWidget(tip)
+
+        form = QFormLayout()
+
+        self.main_hist_src_spin = QSpinBox()
+        self.main_hist_src_spin.setRange(6, 48)
+        self.main_hist_src_spin.setSuffix(" px")
+        self.main_hist_src_spin.setValue(state.main_history_source_font_px)
+
+        self.main_hist_tr_spin = QSpinBox()
+        self.main_hist_tr_spin.setRange(8, 64)
+        self.main_hist_tr_spin.setSuffix(" px")
+        self.main_hist_tr_spin.setValue(state.main_history_translation_font_px)
+
+        self.main_log_spin = QSpinBox()
+        self.main_log_spin.setRange(6, 36)
+        self.main_log_spin.setSuffix(" px")
+        self.main_log_spin.setValue(state.main_log_font_px)
+
+        self.overlay_source_font_spin = QSpinBox()
+        self.overlay_source_font_spin.setRange(8, 72)
+        self.overlay_source_font_spin.setSuffix(" px")
+        self.overlay_source_font_spin.setValue(state.overlay_source_font_size)
+        self.overlay_source_font_spin.setToolTip("桌面悬浮条顶部原文（英文字幕）")
+
+        self.overlay_translation_font_spin = QSpinBox()
+        self.overlay_translation_font_spin.setRange(8, 72)
+        self.overlay_translation_font_spin.setSuffix(" px")
+        self.overlay_translation_font_spin.setValue(state.overlay_translation_font_size)
+        self.overlay_translation_font_spin.setToolTip("桌面悬浮条底部译文（中文）")
+
+        form.addRow("主窗口 · 字幕原文", self.main_hist_src_spin)
+        form.addRow("主窗口 · 字幕译文", self.main_hist_tr_spin)
+        form.addRow("主窗口 · 日志", self.main_log_spin)
+        form.addRow("悬浮层 · 原文", self.overlay_source_font_spin)
+        form.addRow("悬浮层 · 译文", self.overlay_translation_font_spin)
+
+        layout.addLayout(form)
+
+        box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        box.accepted.connect(self.accept)
+        box.rejected.connect(self.reject)
+        layout.addWidget(box)
+
+    def get_state(self) -> AppearanceFontState:
+        return AppearanceFontState(
+            main_history_source_font_px=int(self.main_hist_src_spin.value()),
+            main_history_translation_font_px=int(self.main_hist_tr_spin.value()),
+            main_log_font_px=int(self.main_log_spin.value()),
+            overlay_source_font_size=int(self.overlay_source_font_spin.value()),
+            overlay_translation_font_size=int(self.overlay_translation_font_spin.value()),
+        )
 
 
 class SettingsDialog(QDialog):
@@ -39,10 +138,18 @@ class SettingsDialog(QDialog):
     def __init__(self, settings: AppSettings, transcribe_key: str, translate_key: str, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("设置")
-        self.resize(560, 680)
+        self.resize(560, 480)
+        self._appearance_fonts = AppearanceFontState.from_settings(settings)
 
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
+        root = QVBoxLayout(self)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        form_host = QWidget()
+        form = QFormLayout(form_host)
 
         self.transcribe_base_url_combo = self._preset_combo(
             self.TRANSCRIBE_BASE_URL_PRESETS,
@@ -64,7 +171,7 @@ class SettingsDialog(QDialog):
             settings.recognition.translate_model,
             tip="可从下拉选择常用模型名，或直接输入",
         )
-        self.timeout_spin = QSpinBox()
+        self.timeout_spin = NoWheelSpinBox()
         self.timeout_spin.setRange(5, 120)
         self.timeout_spin.setValue(int(settings.recognition.timeout_seconds))
 
@@ -120,14 +227,38 @@ class SettingsDialog(QDialog):
         self._set_compact_editor_height(self.names_edit, visible_rows=4)
         self.names_edit.setTabChangesFocus(True)
 
-        self.overlay_combo = QComboBox()
-        self.overlay_combo.addItems([OverlayMode.CLICK_THROUGH.value, OverlayMode.WINDOWED.value])
-        self.overlay_combo.setCurrentText(settings.overlay_mode.value)
+        tip_fs = max(7, round(8 * max(70, min(200, int(settings.ui_scale_percent))) / 100))
+
+        self.ui_scale_spin = QSpinBox()
+        self.ui_scale_spin.setRange(70, 200)
+        self.ui_scale_spin.setSuffix(" %")
+        self.ui_scale_spin.setValue(int(settings.ui_scale_percent))
+        self.ui_scale_spin.setToolTip(
+            "主窗口与对话框的基础缩放（70%～200%，100%=默认）。须点本窗口「OK」写入 settings.json。"
+        )
+
+        self.ui_scale_defaults_btn = QPushButton("默认")
+        self.ui_scale_defaults_btn.setToolTip(
+            "整体缩放调回 100%，并恢复主窗口/悬浮层各项字号为安装默认（仍需点本窗口「OK」才保存）。"
+        )
+        self.ui_scale_defaults_btn.clicked.connect(self._reset_ui_scale_and_fonts_to_defaults)
+
+        self.other_fonts_btn = QPushButton("其他字体设置…")
+        self.other_fonts_btn.setToolTip("主窗口字幕/日志与悬浮层字号；在子窗口确定后仍须在本窗口点「OK」一并保存")
+        self.other_fonts_btn.clicked.connect(self._open_appearance_font_dialog)
+
+        ui_scale_field_row = QHBoxLayout()
+        ui_scale_field_row.setContentsMargins(0, 4, 0, 0)
+        ui_scale_field_row.setSpacing(8)
+        ui_scale_field_row.addWidget(self.ui_scale_spin, stretch=0)
+        ui_scale_field_row.addWidget(self.ui_scale_defaults_btn, stretch=0)
+        ui_scale_field_row.addWidget(self.other_fonts_btn, stretch=0)
+        ui_scale_field_row.addStretch(1)
+        ui_scale_field_wrap = QWidget()
+        ui_scale_field_wrap.setLayout(ui_scale_field_row)
 
         self.follow_default_check = QCheckBox("跟随默认播放设备")
         self.follow_default_check.setChecked(settings.audio.follow_default_output)
-        self.local_model_edit = QLineEdit(settings.recognition.local_model_size)
-        self.compute_type_edit = QLineEdit(settings.local_compute_type)
         self.export_dir_edit = QLineEdit(settings.export_dir)
         self.transcribe_key_edit = QLineEdit(transcribe_key)
         self.translate_key_edit = QLineEdit(translate_key)
@@ -162,6 +293,8 @@ class SettingsDialog(QDialog):
         form.addRow("翻译 Base URL", self.translate_base_url_combo)
         form.addRow("转写模型", self.transcribe_model_combo)
         form.addRow("翻译模型", self.translate_model_combo)
+        form.addRow("转写 API Key", self.transcribe_key_edit)
+        form.addRow("翻译 API Key", translate_key_wrap)
         form.addRow("源语言", self.language_combo)
         form.addRow("识别模式", self.mode_combo)
         form.addRow("翻译风格", self.style_combo)
@@ -169,30 +302,39 @@ class SettingsDialog(QDialog):
 
         glossary_tip = QLabel("术语表（品牌/成分/黑话等；可用 原文=译文，# 为注释）")
         glossary_tip.setWordWrap(True)
-        glossary_tip.setStyleSheet("color: #8bb0c9; font-size: 8px;")
+        glossary_tip.setStyleSheet(f"color: #8bb0c9; font-size: {tip_fs}px;")
         form.addRow(glossary_tip)
         form.addRow(self.glossary_edit)
 
         names_tip = QLabel("人名/主播名表（展示名或外文=中文称呼）")
         names_tip.setWordWrap(True)
-        names_tip.setStyleSheet("color: #8bb0c9; font-size: 8px;")
+        names_tip.setStyleSheet(f"color: #8bb0c9; font-size: {tip_fs}px;")
         form.addRow(names_tip)
         form.addRow(self.names_edit)
 
-        form.addRow("悬浮层模式", self.overlay_combo)
+        form.addRow("整体缩放", ui_scale_field_wrap)
+
         form.addRow("超时(秒)", self.timeout_spin)
         form.addRow("", self.follow_default_check)
-        form.addRow("本地模型", self.local_model_edit)
-        form.addRow("本地 compute_type", self.compute_type_edit)
         form.addRow("导出目录", self.export_dir_edit)
-        form.addRow("转写 API Key", self.transcribe_key_edit)
-        form.addRow("翻译 API Key", translate_key_wrap)
-        layout.addLayout(form)
+
+        scroll.setWidget(form_host)
+        root.addWidget(scroll, stretch=1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        root.addWidget(buttons)
+
+    def _reset_ui_scale_and_fonts_to_defaults(self) -> None:
+        self.ui_scale_spin.setValue(100)
+        self._appearance_fonts = AppearanceFontState.from_settings(AppSettings())
+
+    def _open_appearance_font_dialog(self) -> None:
+        dlg = AppearanceFontDialog(self._appearance_fonts, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._appearance_fonts = dlg.get_state()
 
     def _preset_combo(self, presets: tuple[str, ...], current: str, *, tip: str = "") -> QComboBox:
         combo = QComboBox()
@@ -260,8 +402,12 @@ class SettingsDialog(QDialog):
         current.recognition.translate_shares_transcribe_key = self.share_translate_btn.isChecked()
         current.recognition.timeout_seconds = float(self.timeout_spin.value())
         current.audio.follow_default_output = self.follow_default_check.isChecked()
-        current.recognition.local_model_size = self.local_model_edit.text().strip()
-        current.local_compute_type = self.compute_type_edit.text().strip()
-        current.overlay_mode = OverlayMode(self.overlay_combo.currentText())
+        f = self._appearance_fonts
+        current.overlay_source_font_size = f.overlay_source_font_size
+        current.overlay_translation_font_size = f.overlay_translation_font_size
+        current.ui_scale_percent = max(70, min(200, int(self.ui_scale_spin.value())))
+        current.main_history_source_font_px = f.main_history_source_font_px
+        current.main_history_translation_font_px = f.main_history_translation_font_px
+        current.main_log_font_px = f.main_log_font_px
         current.export_dir = self.export_dir_edit.text().strip()
         return current

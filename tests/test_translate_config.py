@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from app.config import SettingsManager
@@ -49,6 +50,30 @@ def test_settings_load_legacy_base_url_into_both_fields(tmp_path: Path):
 
     assert loaded.recognition.transcribe_base_url == "https://legacy.example.com/v1"
     assert loaded.recognition.translate_base_url == "https://legacy.example.com/v1"
+
+
+def test_settings_roundtrip_ui_typography_saved_to_json(tmp_path: Path):
+    """整体缩放与各区域字号写入 settings.json 后应可原样读出。"""
+    path = tmp_path / "settings.json"
+    mgr = SettingsManager(path)
+    settings = AppSettings()
+    settings.ui_scale_percent = 140
+    settings.main_history_source_font_px = 11
+    settings.main_history_translation_font_px = 14
+    settings.main_log_font_px = 10
+    settings.overlay_source_font_size = 16
+    settings.overlay_translation_font_size = 22
+    mgr.save(settings)
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["ui_scale_percent"] == 140
+    assert raw["main_history_source_font_px"] == 11
+    assert raw["main_log_font_px"] == 10
+
+    loaded = mgr.load()
+    assert loaded.ui_scale_percent == 140
+    assert loaded.main_history_translation_font_px == 14
+    assert loaded.overlay_translation_font_size == 22
 
 
 def test_settings_migrate_legacy_shared_api_key_names(tmp_path: Path):

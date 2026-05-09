@@ -24,6 +24,36 @@ SECRET_SERVICE = "realtime-translation"
 # Used when keyring has no transcribe key (e.g. first launch). Replace for your distribution.
 DEFAULT_TRANSCRIBE_API_KEY = "sk-faa688a28c1546a8b74ab658bd1c9cc2"
 
+_FONT_SIZE_MIN = 8
+_FONT_SIZE_MAX = 72
+
+UI_SCALE_MIN = 70
+UI_SCALE_MAX = 200
+
+
+def _clamp_ui_scale(value: object, default: int = 100) -> int:
+    try:
+        n = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return max(UI_SCALE_MIN, min(UI_SCALE_MAX, n))
+
+
+def _clamp_positive_font(value: object, default: int, lo: int, hi: int) -> int:
+    try:
+        n = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, n))
+
+
+def _clamp_overlay_font(value: object, default: int) -> int:
+    try:
+        n = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return max(_FONT_SIZE_MIN, min(_FONT_SIZE_MAX, n))
+
 
 def get_app_paths() -> AppPaths:
     root = Path(user_data_dir(APP_NAME, roaming=True))
@@ -109,6 +139,18 @@ class SettingsManager:
             audio=audio,
             recognition=recognition,
             overlay_mode=overlay_mode,
+            overlay_source_font_size=_clamp_overlay_font(raw.get("overlay_source_font_size", 14), 14),
+            overlay_translation_font_size=_clamp_overlay_font(
+                raw.get("overlay_translation_font_size", 18), 18
+            ),
+            ui_scale_percent=_clamp_ui_scale(raw.get("ui_scale_percent", 100)),
+            main_history_source_font_px=_clamp_positive_font(
+                raw.get("main_history_source_font_px", 9), 9, 6, 48
+            ),
+            main_history_translation_font_px=_clamp_positive_font(
+                raw.get("main_history_translation_font_px", 12), 12, 8, 64
+            ),
+            main_log_font_px=_clamp_positive_font(raw.get("main_log_font_px", 8), 8, 6, 36),
             export_dir=raw.get("export_dir", ""),
             local_compute_type=raw.get("local_compute_type", "int8"),
             transcribe_api_key_name=transcribe_api_key_name,
